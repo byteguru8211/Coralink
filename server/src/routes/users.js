@@ -47,7 +47,12 @@ function registerUserRoutes(router) {
   router.add('PATCH', '/api/v1/me', async (context) => {
     const user = requireAuth(context);
     const body = requireBody(context);
-    const changes = { name: null, about: null, avatarColor: null };
+    const changes = {
+      name: null,
+      about: null,
+      avatarColor: null,
+      presenceVisibility: null,
+    };
 
     if (body.name !== undefined) {
       const name = normalizeName(body.name);
@@ -82,6 +87,17 @@ function registerUserRoutes(router) {
         );
       }
       changes.avatarColor = body.avatarColor;
+    }
+
+    if (body.presenceVisibility !== undefined) {
+      if (!['everyone', 'contacts', 'nobody'].includes(body.presenceVisibility)) {
+        throw new HttpError(
+          400,
+          'invalid_presence_visibility',
+          'presenceVisibility must be everyone, contacts or nobody',
+        );
+      }
+      changes.presenceVisibility = body.presenceVisibility;
     }
 
     const updated = context.db.updateUserProfile(user.id, changes);
@@ -164,7 +180,7 @@ function registerUserRoutes(router) {
   });
 
   router.add('GET', '/api/v1/presence', async (context) => {
-    requireAuth(context);
+    const requester = requireAuth(context);
     const rawIds = context.url.searchParams.get('ids');
     if (typeof rawIds !== 'string' || rawIds.trim() === '') {
       throw new HttpError(400, 'invalid_ids', 'ids query parameter is required');
@@ -190,9 +206,20 @@ function registerUserRoutes(router) {
         throw new HttpError(400, 'invalid_ids', 'Invalid user id');
       }
       const target = context.db.getUserById(id);
+      let visible = Boolean(target);
+      if (target) {
+        const visibility = target.presenceVisibility || 'contacts';
+        if (visibility === 'nobody' && target.id !== requester.id) {
+          visible = false;
+        } else if (visibility === 'contacts' && target.id !== requester.id) {
+          visible =
+            context.db.isContact(target.id, requester.id) ||
+            context.db.isContact(requester.id, target.id);
+        }
+      }
       presence[id] = {
-        online: target ? context.hub.isOnline(target.id) : false,
-        lastSeen: target ? target.lastSeen : null,
+        online: visible ? context.hub.isOnline(target.id) : false,
+        lastSeen: visible ? target.lastSeen : null,
       };
     }
     sendJson(context.res, 200, { presence });

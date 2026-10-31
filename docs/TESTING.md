@@ -7,7 +7,7 @@ cd server
 npm test
 ```
 
-28 тестов (`node:test`), реальные HTTP-запросы и WebSocket-соединения на временном порту и временной БД:
+29 тестов (`node:test`), реальные HTTP-запросы и WebSocket-соединения на временном порту и временной БД:
 
 - auth: dev-код, verify, JWT, неверный код, блокировка попыток, обязательная авторизация;
 - профиль: валидация имени/about/цвета;
@@ -15,7 +15,7 @@ npm test
 - ключи: загрузка, выдача bundle, одноразовое расходование prekey, повторный запрос → `no_keys`;
 - очередь сообщений, ack, read receipt;
 - WS: отказ без токена, `ready`, онлайн-доставка, ack, офлайн-очередь, signal/typing/presence, `peer_offline`, идемпотентность;
-- CORS preflight, rate limit;
+- CORS preflight, rate limit, видимость присутствия (everyone/contacts/nobody);
 - `control`-конверты, ICE-метаданные, удаление аккаунта `DELETE /me`.
 
 ## 2. Клиентские тесты

@@ -185,6 +185,7 @@ class SessionController extends Notifier<SessionState> {
       token: token,
       user: user,
       archiveDays: ref.read(settingsProvider).autoArchiveDays,
+      presenceScope: ref.read(settingsProvider).privacyScope.name,
     );
     state = SessionState(
       status: SessionStatus.authenticated,

@@ -189,11 +189,13 @@ class ApiClient {
     String? name,
     String? about,
     String? avatarColor,
+    String? presenceVisibility,
   }) async {
     final json = await _send('PATCH', '/me', body: {
       if (name != null) 'name': name,
       if (about != null) 'about': about,
       if (avatarColor != null) 'avatarColor': avatarColor,
+      if (presenceVisibility != null) 'presenceVisibility': presenceVisibility,
     });
     return User.fromJson(json['user'] as Map<String, dynamic>);
   }

@@ -55,7 +55,17 @@ class SettingsPrivacyScreen extends ConsumerWidget {
                     trailing: settings.privacyScope == scope.$1
                         ? Icon(Icons.check_rounded, color: palette.accent)
                         : null,
-                    onTap: () => ref.read(settingsProvider.notifier).setPrivacy(scope.$1),
+                    onTap: () async {
+                      await ref.read(settingsProvider.notifier).setPrivacy(scope.$1);
+                      try {
+                        await ref
+                            .read(clientProvider)
+                            .api
+                            .updateProfile(presenceVisibility: scope.$1.name);
+                      } catch (_) {
+                        // Offline: applied locally and synced on next launch.
+                      }
+                    },
                   ),
               ],
             ),

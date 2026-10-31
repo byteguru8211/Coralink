@@ -28,13 +28,13 @@ Coralink — кросс-платформенный мессенджер со с�
 | Реакции-капли, удаление у себя/у всех, фото | ✅ |
 | Тёмная/светлая изумрудная темы, RU/EN | ✅ |
 | Сервер: auth, ключи, signaling, relay, presence, push-токены | ✅ |
-| Тесты: 28 серверных + 11 клиентских + реальный E2E двух клиентов | ✅ |
+| Тесты: 29 серверных + 11 клиентских + реальный E2E двух клиентов | ✅ |
 
 ## Статус проверки (2026-10-31)
 
 | Проверка | Результат |
 |---|---|
-| `server: npm test` | 28/28 |
+| `server: npm test` | 29/29 |
 | `app: flutter test` | 11/11 |
 | `flutter analyze` | 0 ошибок и предупреждений (11 info-подсказок) |
 | E2E двух клиентов (Windows integration test) | пройден: A↔B, офлайн-очередь, сервер видит только шифротекст |
@@ -133,7 +133,7 @@ Release-подпись Android берётся из `android/key.properties` (ф�
 ## Тесты
 
 ```bash
-cd server && npm test                # 28 тестов API + WS
+cd server && npm test                # 29 тестов API + WS
 cd app && flutter test               # юнит- и виджет-тесты
 # E2E: требует запущенный сервер на 127.0.0.1:8080
 cd app && flutter test integration_test/e2e_test.dart -d windows

@@ -43,8 +43,14 @@ class ClientBundle {
     required String token,
     required User user,
     required int archiveDays,
+    required String presenceScope,
   }) async {
     final api = ApiClient(baseUrl: config.apiBaseUrl, token: token);
+    try {
+      await api.updateProfile(presenceVisibility: presenceScope);
+    } catch (_) {
+      // Offline start: the setting will be pushed on the next profile save.
+    }
     final signal = await SignalService.load(secure: secure, api: api, userId: user.id);
     final realtime = RealtimeService(config.wsUrl, token);
     final p2p = P2PManager(config, realtime);

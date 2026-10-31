@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
   registration_id INTEGER,
   signed_prekey_id INTEGER,
   signed_prekey TEXT,
-  signed_prekey_signature TEXT
+  signed_prekey_signature TEXT,
+  presence_visibility TEXT NOT NULL DEFAULT 'contacts'
 );
 
 CREATE TABLE IF NOT EXISTS prekeys (
@@ -79,6 +80,7 @@ function mapUser(row) {
     name: row.name,
     about: row.about || '',
     avatarColor: row.avatar_color || '#1A9C7A',
+    presenceVisibility: row.presence_visibility || 'contacts',
     createdAt: row.created_at,
     lastSeen: row.last_seen,
     identityKey: row.identity_key || null,
@@ -145,6 +147,12 @@ class CoralinkDatabase {
       typeof value === 'string' ? value.toLowerCase() : value,
     );
     this.db.exec(SCHEMA);
+    const userColumns = this.db.prepare('PRAGMA table_info(users)').all();
+    if (!userColumns.some((column) => column.name === 'presence_visibility')) {
+      this.db.exec(
+        "ALTER TABLE users ADD COLUMN presence_visibility TEXT NOT NULL DEFAULT 'contacts'",
+      );
+    }
 
     this.stmts = {
       getUserById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -158,7 +166,8 @@ class CoralinkDatabase {
         UPDATE users
         SET name = COALESCE(?, name),
             about = COALESCE(?, about),
-            avatar_color = COALESCE(?, avatar_color)
+            avatar_color = COALESCE(?, avatar_color),
+            presence_visibility = COALESCE(?, presence_visibility)
         WHERE id = ?
       `),
       touchLastSeen: this.db.prepare(
@@ -355,9 +364,32 @@ class CoralinkDatabase {
     return this.getUserById(id);
   }
 
-  updateUserProfile(id, { name = null, about = null, avatarColor = null } = {}) {
-    this.stmts.updateUserProfile.run(name, about, avatarColor, id);
+  updateUserProfile(
+    id,
+    {
+      name = null,
+      about = null,
+      avatarColor = null,
+      presenceVisibility = null,
+    } = {},
+  ) {
+    this.stmts.updateUserProfile.run(
+      name,
+      about,
+      avatarColor,
+      presenceVisibility,
+      id,
+    );
     return this.getUserById(id);
+  }
+
+  isContact(userId, contactId) {
+    const row = this.db
+      .prepare(
+        'SELECT 1 AS ok FROM contacts WHERE user_id = ? AND contact_id = ? LIMIT 1',
+      )
+      .get(userId, contactId);
+    return Boolean(row);
   }
 
   touchLastSeen(id, timestamp = Date.now()) {

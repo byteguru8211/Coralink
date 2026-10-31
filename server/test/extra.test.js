@@ -94,3 +94,52 @@ test(
     assert.equal(again.isNew, true);
   },
 );
+
+test(
+  'presence visibility is enforced by the server',
+  { timeout: TEST_TIMEOUT },
+  async (t) => {
+    const h = await harness(t);
+    const alice = await h.login('79993000004', 'Alice');
+    const bob = await h.login('79993000005', 'Bob');
+    const aliceWs = await h.openWs(alice.token);
+    await aliceWs.waitFor('ready');
+
+    const read = async () => {
+      const response = await h.api(
+        `/api/v1/presence?ids=${encodeURIComponent(alice.user.id)}`,
+        { token: bob.token },
+      );
+      assert.equal(response.status, 200);
+      return response.body.presence[alice.user.id];
+    };
+
+    // Default is "contacts" and Bob is not a contact yet.
+    assert.equal((await read()).online, false);
+
+    const everyone = await h.api('/api/v1/me', {
+      method: 'PATCH',
+      token: alice.token,
+      body: { presenceVisibility: 'everyone' },
+    });
+    assert.equal(everyone.status, 200);
+    assert.equal((await read()).online, true);
+
+    const nobody = await h.api('/api/v1/me', {
+      method: 'PATCH',
+      token: alice.token,
+      body: { presenceVisibility: 'nobody' },
+    });
+    assert.equal(nobody.status, 200);
+    const hidden = await read();
+    assert.equal(hidden.online, false);
+    assert.equal(hidden.lastSeen, null);
+
+    const invalid = await h.api('/api/v1/me', {
+      method: 'PATCH',
+      token: alice.token,
+      body: { presenceVisibility: 'friends' },
+    });
+    assert.equal(invalid.status, 400);
+  },
+);

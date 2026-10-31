@@ -65,15 +65,21 @@ function createHub({ db, config, logger }) {
   }
 
   function broadcastPresence(userId, status, lastSeen) {
-    const contactIds = db.getUserIdsHavingContact(userId);
+    const target = db.getUserById(userId);
+    const visibility = target?.presenceVisibility || 'contacts';
+    if (visibility === 'nobody') return;
+    const recipientIds =
+      visibility === 'everyone'
+        ? Array.from(clients.keys()).filter((id) => id !== userId)
+        : db.getUserIdsHavingContact(userId);
     const event = {
       type: 'presence',
       userId,
       status,
       lastSeen,
     };
-    for (const contactId of contactIds) {
-      sendToUser(contactId, event);
+    for (const recipientId of recipientIds) {
+      sendToUser(recipientId, event);
     }
   }
 

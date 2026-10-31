@@ -51,14 +51,14 @@ GET /api/v1/me
 → 200 {"user":{...приватный профиль с phone...}}
 
 PATCH /api/v1/me
-{"name":"Алиса","about":"Люблю растения","avatarColor":"#2FB894"}
+{"name":"Алиса","about":"Люблю растения","avatarColor":"#2FB894","presenceVisibility":"contacts"}
 → 200 {"user":{...}}
 
 DELETE /api/v1/me
 → 200 {"ok":true}      // каскадное удаление аккаунта и данных
 ```
 
-Ограничения: имя 1–64, about ≤ 280, цвет `#RRGGBB`.
+Ограничения: имя 1–64, about ≤ 280, цвет `#RRGGBB`, `presenceVisibility` — `everyone | contacts | nobody`.
 
 ### Поиск и контакты
 
@@ -130,6 +130,8 @@ POST /api/v1/messages/ack
 GET /api/v1/presence?ids=uuid1,uuid2
 → 200 {"presence":{"uuid1":{"online":true,"lastSeen":1730000000000}}}
 ```
+
+Фильтрация: при `nobody` другие видят `online:false` и `lastSeen:null`; при `contacts` — только взаимные контакты; `everyone` — все авторизованные. Сервер применяет ту же политику к WS-событиям `presence`.
 
 ### Push-токены
 
