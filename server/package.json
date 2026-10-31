@@ -1,0 +1,27 @@
+{
+  "name": "coralink-server",
+  "version": "1.0.0",
+  "description": "Signaling, relay, and offline message server for the Coralink E2EE messenger",
+  "private": true,
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "coralink",
+    "e2ee",
+    "messenger",
+    "websocket"
+  ],
+  "author": "Coralink",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

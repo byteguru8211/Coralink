@@ -1,0 +1,698 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:mime/mime.dart';
+
+import '../../app/dependencies.dart';
+import '../../app/session.dart';
+import '../../core/app_colors.dart';
+import '../../core/strings.dart';
+import '../../core/utils.dart';
+import '../../domain/models.dart';
+import '../../network/realtime.dart';
+import '../../security/signal_service.dart';
+import '../controllers.dart';
+import '../widgets/chat_widgets.dart';
+import '../widgets/coral_widgets.dart';
+
+class ChatScreen extends ConsumerStatefulWidget {
+  const ChatScreen({super.key, required this.chatId, this.initialTitle});
+  final String chatId;
+  final String? initialTitle;
+
+  @override
+  ConsumerState<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends ConsumerState<ChatScreen> {
+  final _text = TextEditingController();
+  final _focus = FocusNode();
+  final _scroll = ScrollController();
+  bool _canSend = false;
+  bool _rustling = false;
+  bool _sendPulse = false;
+  int _lastCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom(animate: false);
+      _syncRustle(ref.read(messagesProvider(widget.chatId)));
+    });
+  }
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _focus.dispose();
+    _scroll.dispose();
+    if (_rustling) ref.read(audioProvider).stopRustle();
+    super.dispose();
+  }
+
+  void _scrollToBottom({bool animate = true}) {
+    if (!_scroll.hasClients) return;
+    final target = _scroll.position.maxScrollExtent;
+    if (animate) {
+      _scroll.animateTo(target, duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+    } else {
+      _scroll.jumpTo(target);
+    }
+  }
+
+  void _syncRustle(MessagesState state) {
+    final settings = ref.read(settingsProvider);
+    final shouldPlay = settings.rustleSound && state.presence != Presence.offline;
+    if (shouldPlay && !_rustling) {
+      _rustling = true;
+      ref.read(audioProvider).startRustle();
+    } else if (!shouldPlay && _rustling) {
+      _rustling = false;
+      ref.read(audioProvider).stopRustle();
+    }
+  }
+
+  Chat? _findChat(ChatsState chats) {
+    for (final chat in [...chats.chats, ...chats.archived]) {
+      if (chat.id == widget.chatId) return chat;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = ref.watch(stringsProvider);
+    final palette = context.palette;
+    final state = ref.watch(messagesProvider(widget.chatId));
+    final chats = ref.watch(chatsProvider);
+    final chat = _findChat(chats);
+    final name = chat?.peerName ?? widget.initialTitle ?? 'Coralink';
+
+    ref.listen<MessagesState>(messagesProvider(widget.chatId), (previous, next) {
+      if (previous == null) return;
+      if (next.messages.length != previous.messages.length || next.messages.length != _lastCount) {
+        _lastCount = next.messages.length;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      }
+      if (next.presence != previous.presence || next.lastSeen != previous.lastSeen) {
+        _syncRustle(next);
+      }
+    });
+
+    final connection = ref.watch(chatsProvider.select((s) => s.connection));
+    final connected = connection == RealtimeStatus.connected;
+
+    return Scaffold(
+      backgroundColor: palette.background,
+      appBar: AppBar(
+        titleSpacing: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          icon: const Icon(Icons.arrow_back_rounded),
+        ),
+        title: Row(
+          children: [
+            SeedAvatar(
+              seedId: widget.chatId,
+              name: name,
+              colorHex: chat?.peerAvatarColor,
+              online: state.presence != Presence.offline,
+              size: 36,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: palette.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      if (state.peerTyping) ...[
+                        TypingDots(color: palette.accentSoft),
+                        const SizedBox(width: 6),
+                      ],
+                      Flexible(
+                        child: Text(
+                          state.peerTyping
+                              ? strings.get('typing')
+                              : switch (state.presence) {
+                                  Presence.online => strings.get('online'),
+                                  Presence.active => strings.get('active'),
+                                  Presence.away => strings.get('away'),
+                                  Presence.offline => lastSeenLabel(state.lastSeen, strings),
+                                },
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: palette.textMuted, fontSize: 11.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (state.direct)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Icon(Icons.bolt_rounded, color: palette.halo, size: 22),
+            ),
+          if (!connected)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Icon(Icons.cloud_off_rounded, color: palette.coral, size: 18),
+            ),
+          IconButton(
+            onPressed: () => _showChatMenu(chat, strings),
+            icon: const Icon(Icons.more_vert_rounded),
+          ),
+        ],
+      ),
+      body: CoralBackground(
+        child: Column(
+        children: [
+          Expanded(
+            child: state.loading
+                ? Center(child: CircularProgressIndicator(color: palette.accent))
+                : _buildMessages(state, strings, chat),
+          ),
+          if (state.peerTyping)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 2, 24, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  children: [
+                    TypingDots(color: palette.accentSoft),
+                    const SizedBox(width: 8),
+                    Text(
+                      strings.get('typing'),
+                      style: TextStyle(color: palette.textMuted, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          _buildInput(strings, palette),
+        ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessages(MessagesState state, AppStrings strings, Chat? chat) {
+    final palette = context.palette;
+    final widgets = <Widget>[];
+    if (state.archivedCount > 0) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => ref.read(messagesProvider(widget.chatId).notifier).toggleArchive(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: palette.surface.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: palette.divider),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.waves_rounded, size: 16, color: palette.accentSoft),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      state.showArchive
+                          ? strings.get('hideArchive')
+                          : '${strings.get('showArchive')} (${state.archivedCount})',
+                      style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                    ),
+                  ),
+                  Icon(
+                    state.showArchive
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: palette.textMuted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    widgets.add(
+      Padding(
+        padding: const EdgeInsets.fromLTRB(30, 10, 30, 6),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock_outline_rounded, size: 12, color: palette.textMuted),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                strings.get('encryptionNotice'),
+                textAlign: TextAlign.center,
+                style: TextStyle(color: palette.textMuted, fontSize: 10.5),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (state.messages.isEmpty) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 50),
+          child: Column(
+            children: [
+              Icon(Icons.spa_outlined, size: 40, color: palette.accentSoft),
+              const SizedBox(height: 14),
+              Text(
+                strings.get('chatEmpty'),
+                textAlign: TextAlign.center,
+                style: TextStyle(color: palette.textMuted, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    DateTime? lastDay;
+    for (final message in state.messages) {
+      final local = message.createdAt.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      if (lastDay == null || day != lastDay) {
+        widgets.add(DateDivider(label: relativeDay(message.createdAt, strings)));
+        lastDay = day;
+      }
+      widgets.add(
+        MessageBubble(
+          key: ValueKey(message.id),
+          message: message,
+          myId: ref.read(sessionProvider).user?.id ?? '',
+          strings: strings,
+          onLongPress: () => _showMessageActions(message, strings),
+          onRetry: message.status == MessageStatus.failed
+              ? () => ref.read(messagesProvider(widget.chatId).notifier).retry(message)
+              : null,
+        ),
+      );
+    }
+
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.only(top: 6, bottom: 12),
+      itemCount: widgets.length,
+      itemBuilder: (context, index) => widgets[index],
+    );
+  }
+
+  Widget _buildInput(AppStrings strings, CoralinkPalette palette) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      decoration: BoxDecoration(
+        color: palette.navBackground.withValues(alpha: 0.92),
+        border: Border(top: BorderSide(color: palette.divider)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            IconButton(
+              onPressed: () => _pickImage(strings),
+              icon: Icon(Icons.add_circle_outline_rounded, color: palette.accentSoft),
+            ),
+            Expanded(
+              child: TextField(
+                controller: _text,
+                focusNode: _focus,
+                minLines: 1,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                style: TextStyle(color: palette.textPrimary, fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: strings.get('messageHint'),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+                onChanged: (value) {
+                  setState(() => _canSend = value.trim().isNotEmpty);
+                  ref.read(messagesProvider(widget.chatId).notifier).onTextChanged(value);
+                },
+                onSubmitted: (_) => _send(strings),
+              ),
+            ),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: _canSend ? () => _send(strings) : null,
+              child: AnimatedScale(
+                scale: _sendPulse ? 1.18 : 1,
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutBack,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: _canSend
+                        ? LinearGradient(
+                            colors: [palette.accent, palette.accentSoft],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          )
+                        : null,
+                    color: _canSend ? null : palette.surfaceElevated,
+                    boxShadow: _canSend
+                        ? [
+                            BoxShadow(
+                              color: palette.accent.withValues(alpha: 0.4),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Icon(
+                    Icons.arrow_upward_rounded,
+                    color: _canSend ? Colors.white : palette.textMuted,
+                    size: 22,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _send(AppStrings strings) async {
+    final text = _text.text.trim();
+    if (text.isEmpty) return;
+    _text.clear();
+    setState(() => _canSend = false);
+    _sendPulse = true;
+    Future.delayed(const Duration(milliseconds: 220), () {
+      if (mounted) setState(() => _sendPulse = false);
+    });
+    try {
+      await ref.read(messagesProvider(widget.chatId).notifier).sendText(text);
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
+  }
+
+  Future<void> _pickImage(AppStrings strings) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SettingsTile(
+              icon: Icons.photo_library_outlined,
+              title: strings.get('gallery'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            if (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS)
+              SettingsTile(
+                icon: Icons.photo_camera_outlined,
+                title: strings.get('camera'),
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    try {
+      final file = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 1280,
+        imageQuality: 65,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (bytes.lengthInBytes > 340 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.get('imageTooLarge'))),
+        );
+        return;
+      }
+      final mime = lookupMimeType(file.name) ?? 'image/jpeg';
+      await ref.read(messagesProvider(widget.chatId).notifier).sendImage(
+            base64Encode(bytes),
+            mime,
+            file.name,
+          );
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
+  }
+
+  String _errorText(Object error, AppStrings strings) {
+    if (error is ArgumentError) {
+      final message = '${error.message}';
+      if (message.contains('image_too_large')) return strings.get('imageTooLarge');
+      if (message.contains('long')) return strings.get('imageTooLarge');
+    }
+    if (error is EncryptionException) {
+      return switch (error.code) {
+        'no_keys' => strings.get('noKeys'),
+        'identity_changed' => strings.get('identityChanged'),
+        _ => strings.get('networkError'),
+      };
+    }
+    return strings.get('networkError');
+  }
+
+  Future<void> _showMessageActions(Message message, AppStrings strings) async {
+    final palette = context.palette;
+    final mine = message.senderId == ref.read(sessionProvider).user?.id;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+              child: Row(
+                children: [
+                  for (final emoji in const ['💧', '🌿', '🪷', '✨'])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          ref
+                              .read(messagesProvider(widget.chatId).notifier)
+                              .react(message.id, emoji);
+                        },
+                        child: Container(
+                          width: 46,
+                          height: 46,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: palette.surfaceElevated,
+                            border: Border.all(color: palette.divider),
+                          ),
+                          child: Text(emoji, style: const TextStyle(fontSize: 21)),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (message.text.isNotEmpty && !message.deleted)
+              SettingsTile(
+                icon: Icons.copy_rounded,
+                title: strings.get('copy'),
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: message.text));
+                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(strings.get('copied'))),
+                  );
+                },
+              ),
+            SettingsTile(
+              icon: Icons.delete_sweep_outlined,
+              title: strings.get('deleteForMe'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                ref.read(messagesProvider(widget.chatId).notifier).deleteForMe(message.id);
+              },
+            ),
+            if (mine)
+              SettingsTile(
+                icon: Icons.delete_forever_outlined,
+                title: strings.get('deleteForEveryone'),
+                danger: true,
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      backgroundColor: palette.surface,
+                      title: Text(strings.get('deleteMessage')),
+                      content: Text(strings.get('deleteForEveryone')),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: Text(strings.get('cancel')),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: Text(strings.get('delete'), style: TextStyle(color: palette.coral)),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    await ref
+                        .read(messagesProvider(widget.chatId).notifier)
+                        .deleteForEveryone(message.id);
+                  }
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showChatMenu(Chat? chat, AppStrings strings) async {
+    final palette = context.palette;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (chat != null) ...[
+              SettingsTile(
+                icon: chat.pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                title: strings.get(chat.pinned ? 'unpin' : 'pinned'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  ref.read(chatsProvider.notifier).togglePin(chat.id);
+                },
+              ),
+              SettingsTile(
+                icon: chat.muted ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                title: chat.muted
+                    ? (strings.locale.languageCode == 'en' ? 'Unmute' : 'Включить звук')
+                    : (strings.locale.languageCode == 'en' ? 'Mute' : 'Без звука'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  ref.read(chatsProvider.notifier).toggleMute(chat.id);
+                },
+              ),
+              SettingsTile(
+                icon: chat.archived ? Icons.unarchive_rounded : Icons.archive_outlined,
+                title: strings.get(chat.archived ? 'unarchive' : 'archiveAction'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  if (chat.archived) {
+                    ref.read(chatsProvider.notifier).unarchive(chat.id);
+                  } else {
+                    ref.read(chatsProvider.notifier).archive(chat.id);
+                  }
+                },
+              ),
+            ],
+            SettingsTile(
+              icon: Icons.cleaning_services_outlined,
+              title: strings.get('clearHistory'),
+              onTap: () async {
+                Navigator.pop(sheetContext);
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    backgroundColor: palette.surface,
+                    title: Text(strings.get('clearHistory')),
+                    content: Text(strings.get('clearHistoryConfirm')),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: Text(strings.get('cancel')),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: Text(strings.get('clearHistory'), style: TextStyle(color: palette.coral)),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await ref.read(clientProvider).store.deleteMessages(widget.chatId);
+                  await ref.read(messagesProvider(widget.chatId).notifier).reload();
+                  ref.read(chatsProvider.notifier).refresh();
+                }
+              },
+            ),
+            SettingsTile(
+              icon: Icons.block_rounded,
+              title: strings.get('blocked'),
+              subtitle: strings.get('blockedInfo'),
+              danger: true,
+              onTap: () {
+                Navigator.pop(sheetContext);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(strings.get('blockedInfo'))),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+}

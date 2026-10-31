@@ -1,0 +1,44 @@
+# Flutter / Dart
+app/.dart_tool/
+app/.packages
+app/.pub-cache/
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+app/android/keystore/
+app/android/app/debug/
+app/android/app/profile/
+app/android/app/release/
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+app/windows/flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/macos/Flutter/ephemeral/
+*.iml
+
+# Server
+server/node_modules/
+server/data/
+server/.env
+server/*.log
+
+# Tooling / OS
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+vibe_images/
+Plan/plan.txt
+
+# Presentation temp files
+~$*.pptx
+
+# Build logs
+app/build_release_*.log
+dist/
