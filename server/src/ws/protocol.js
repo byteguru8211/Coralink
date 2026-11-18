@@ -181,6 +181,33 @@ function parseClientEvent(raw) {
         ids,
       };
     }
+    case 'group.send': {
+      if (!isBase64String(event.ciphertext, MAX_MESSAGE_BYTES)) {
+        fail(
+          'invalid_message',
+          `ciphertext must be base64 and no larger than ${MAX_MESSAGE_BYTES} bytes`,
+        );
+      }
+      const kind = event.kind === undefined ? 'text' : event.kind;
+      if (!isKind(kind)) fail('invalid_message', 'kind is invalid');
+      return {
+        type: 'group.send',
+        id: requireUuid(event.id, 'id'),
+        groupId: requireUuid(event.groupId, 'groupId'),
+        ciphertext: event.ciphertext,
+        kind,
+        meta: validateMeta(event.meta),
+        createdAt: validateCreatedAt(event.createdAt),
+      };
+    }
+    case 'group.read': {
+      const ids = validateIds(event.ids);
+      return {
+        type: 'group.read',
+        groupId: requireUuid(event.groupId, 'groupId'),
+        ids,
+      };
+    }
     case 'signal':
       return {
         type: 'signal',

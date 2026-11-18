@@ -6,6 +6,7 @@ const { createDatabase } = require('./db');
 const { createHttpHandler, Router, sendJson } = require('./lib/http');
 const { createLogger } = require('./lib/log');
 const { registerAuthRoutes } = require('./routes/auth');
+const { registerGroupRoutes } = require('./routes/groups');
 const { registerKeyRoutes } = require('./routes/keys');
 const { registerMessageRoutes } = require('./routes/messages');
 const { registerPushRoutes } = require('./routes/push');
@@ -26,6 +27,7 @@ function createApp(options = {}) {
   const router = new Router();
   registerAuthRoutes(router);
   registerUserRoutes(router);
+  registerGroupRoutes(router);
   registerKeyRoutes(router);
   registerMessageRoutes(router);
   registerPushRoutes(router);

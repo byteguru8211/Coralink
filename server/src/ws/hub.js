@@ -276,6 +276,78 @@ function createHub({ db, config, logger }) {
     }
   }
 
+  function handleGroupSend(ws, event) {
+    const sender = ws.coralinkUser;
+    if (!db.isGroupMember(event.groupId, sender.id)) {
+      send(ws, {
+        type: 'error',
+        code: 'not_a_member',
+        message: 'You are not a member of this group',
+      });
+      return;
+    }
+    const members = db.listGroupMembers(event.groupId);
+    const memberIds = members.map((m) => m.id);
+    const now = Date.now();
+    const createdAt = event.createdAt === null ? now : event.createdAt;
+    db.insertGroupMessage({
+      id: event.id,
+      groupId: event.groupId,
+      senderId: sender.id,
+      ciphertext: event.ciphertext,
+      kind: event.kind,
+      meta: event.meta,
+      createdAt,
+      expiresAt: now + config.messageTtlMs,
+      memberIds,
+    });
+
+    let delivered = 0;
+    for (const memberId of memberIds) {
+      if (memberId === sender.id) continue;
+      delivered += sendToUser(memberId, {
+        type: 'group.message',
+        message: {
+          id: event.id,
+          groupId: event.groupId,
+          from: sender.id,
+          ciphertext: event.ciphertext,
+          kind: event.kind,
+          meta: event.meta,
+          createdAt,
+        },
+      });
+    }
+
+    send(ws, {
+      type: 'message.ack',
+      id: event.id,
+      status: delivered > 0 ? 'delivered' : 'queued',
+    });
+  }
+
+  function handleGroupRead(ws, event) {
+    const user = ws.coralinkUser;
+    const readIds = db.markGroupMessagesRead(user.id, event.ids, Date.now());
+    if (readIds.length === 0) return;
+    // Resolve senders for the read messages and fan out read receipts.
+    const bySender = new Map();
+    for (const id of readIds) {
+      const senderId = db.getGroupMessageSender(id);
+      if (!senderId || senderId === user.id) continue;
+      if (!bySender.has(senderId)) bySender.set(senderId, []);
+      bySender.get(senderId).push(id);
+    }
+    for (const [senderId, ids] of bySender) {
+      sendToUser(senderId, {
+        type: 'group.read',
+        groupId: event.groupId,
+        messageIds: ids,
+        by: user.id,
+      });
+    }
+  }
+
   function handleTyping(ws, event) {
     const user = ws.coralinkUser;
     if (!isOnline(event.to)) return;
@@ -299,6 +371,12 @@ function createHub({ db, config, logger }) {
         break;
       case 'signal':
         handleSignal(ws, event);
+        break;
+      case 'group.send':
+        handleGroupSend(ws, event);
+        break;
+      case 'group.read':
+        handleGroupRead(ws, event);
         break;
       case 'typing':
         handleTyping(ws, event);

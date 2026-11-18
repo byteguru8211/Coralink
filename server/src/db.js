@@ -68,12 +68,52 @@ CREATE TABLE IF NOT EXISTS push_tokens (
   PRIMARY KEY(user_id, token)
 );
 
+CREATE TABLE IF NOT EXISTS groups (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  avatar TEXT DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member',
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY(group_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_messages (
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
+  meta TEXT DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_message_receipts (
+  message_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  delivered_at INTEGER,
+  read_at INTEGER,
+  PRIMARY KEY(message_id, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_delivered
   ON messages(recipient_id, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_group_messages_group
+  ON group_messages(group_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_group_receipts_user
+  ON group_message_receipts(user_id, delivered_at);
 `;
 
 function mapUser(row) {
@@ -134,6 +174,20 @@ function mapMessage(row) {
       row.read_at === null || row.read_at === undefined
         ? null
         : Number(row.read_at),
+    expiresAt: Number(row.expires_at),
+  };
+}
+
+function mapGroupMessage(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    groupId: row.group_id,
+    senderId: row.sender_id,
+    ciphertext: row.ciphertext,
+    kind: row.kind || 'text',
+    meta: safeParseMeta(row.meta),
+    createdAt: Number(row.created_at),
     expiresAt: Number(row.expires_at),
   };
 }
@@ -335,9 +389,11 @@ class CoralinkDatabase {
     };
 
     this.cleanupExpiredMessages();
+    this.cleanupExpiredGroupMessages();
     this.cleanupTimer = setInterval(() => {
       try {
         this.cleanupExpiredMessages();
+        this.cleanupExpiredGroupMessages();
       } catch {
         // The next interval or startup cleanup will retry. Avoid crashing the
         // process because of a transient storage error.
@@ -638,6 +694,233 @@ class CoralinkDatabase {
     return this.stmts.deletePushToken.run(userId, token).changes > 0;
   }
 
+  createGroup({
+    id,
+    title,
+    avatar = '',
+    createdBy,
+    memberIds = [],
+    createdAt = Date.now(),
+  }) {
+    this.transaction(() => {
+      this.db
+        .prepare(
+          'INSERT INTO groups (id, title, avatar, created_by, created_at) VALUES (?, ?, ?, ?, ?)',
+        )
+        .run(id, title, avatar, createdBy, createdAt);
+      const add = this.db.prepare(
+        'INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
+      );
+      add.run(id, createdBy, 'owner', createdAt);
+      for (const userId of memberIds) {
+        if (userId === createdBy) continue;
+        add.run(id, userId, 'member', createdAt);
+      }
+    });
+    return this.getGroup(id);
+  }
+
+  getGroup(id) {
+    const row = this.db.prepare('SELECT * FROM groups WHERE id = ?').get(id);
+    if (!row) return null;
+    return {
+      id: row.id,
+      title: row.title,
+      avatar: row.avatar || '',
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+    };
+  }
+
+  listGroupsForUser(userId) {
+    return this.db
+      .prepare(
+        `SELECT g.* FROM groups g
+         JOIN group_members m ON m.group_id = g.id
+         WHERE m.user_id = ?
+         ORDER BY g.created_at DESC`,
+      )
+      .all(userId)
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        avatar: row.avatar || '',
+        createdBy: row.created_by,
+        createdAt: row.created_at,
+      }));
+  }
+
+  listGroupMembers(groupId) {
+    return this.db
+      .prepare(
+        `SELECT u.id, u.name, u.username, u.avatar, u.avatar_color, m.role, m.joined_at
+         FROM group_members m JOIN users u ON u.id = m.user_id
+         WHERE m.group_id = ?
+         ORDER BY m.role = 'owner' DESC, m.joined_at ASC`,
+      )
+      .all(groupId)
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        username: row.username || null,
+        avatar: row.avatar || '',
+        avatarColor: row.avatar_color || '#1A9C7A',
+        role: row.role,
+        joinedAt: row.joined_at,
+      }));
+  }
+
+  isGroupMember(groupId, userId) {
+    return Boolean(
+      this.db
+        .prepare(
+          'SELECT 1 AS ok FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1',
+        )
+        .get(groupId, userId),
+    );
+  }
+
+  addGroupMember(groupId, userId, role = 'member', joinedAt = Date.now()) {
+    this.db
+      .prepare(
+        'INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
+      )
+      .run(groupId, userId, role, joinedAt);
+  }
+
+  removeGroupMember(groupId, userId) {
+    return (
+      this.db
+        .prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?')
+        .run(groupId, userId).changes > 0
+    );
+  }
+
+  insertGroupMessage({
+    id,
+    groupId,
+    senderId,
+    ciphertext,
+    kind = 'text',
+    meta = {},
+    createdAt = Date.now(),
+    expiresAt,
+    memberIds = [],
+  }) {
+    const serializedMeta =
+      typeof meta === 'string' ? meta : JSON.stringify(meta || {});
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO group_messages
+            (id, group_id, sender_id, ciphertext, kind, meta, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          groupId,
+          senderId,
+          ciphertext,
+          kind,
+          serializedMeta,
+          createdAt,
+          expiresAt,
+        );
+      const receipt = this.db.prepare(
+        'INSERT OR IGNORE INTO group_message_receipts (message_id, user_id, delivered_at, read_at) VALUES (?, ?, NULL, NULL)',
+      );
+      for (const userId of memberIds) {
+        if (userId === senderId) continue;
+        receipt.run(id, userId);
+      }
+    });
+  }
+
+  getPendingGroupMessages(userId, now = Date.now(), limit = 500) {
+    return this.db
+      .prepare(
+        `SELECT m.* FROM group_messages m
+         JOIN group_message_receipts r ON r.message_id = m.id
+         WHERE r.user_id = ? AND r.delivered_at IS NULL AND m.expires_at > ?
+         ORDER BY m.created_at ASC, m.id ASC
+         LIMIT ?`,
+      )
+      .all(userId, now, limit)
+      .map(mapGroupMessage);
+  }
+
+  ackGroupMessages(userId, ids, now = Date.now()) {
+    const bySender = new Map();
+    let acked = 0;
+    this.transaction(() => {
+      for (const id of ids) {
+        const res = this.db
+          .prepare(
+            'UPDATE group_message_receipts SET delivered_at = ? WHERE message_id = ? AND user_id = ? AND delivered_at IS NULL',
+          )
+          .run(now, id, userId);
+        if (res.changes === 0) continue;
+        acked += 1;
+        const msg = this.db
+          .prepare('SELECT sender_id FROM group_messages WHERE id = ?')
+          .get(id);
+        if (msg) {
+          if (!bySender.has(msg.sender_id)) bySender.set(msg.sender_id, []);
+          bySender.get(msg.sender_id).push(id);
+        }
+      }
+    });
+    return {
+      acked,
+      bySender: Array.from(bySender, ([senderId, messageIds]) => ({
+        senderId,
+        messageIds,
+      })),
+    };
+  }
+
+  markGroupMessagesRead(userId, ids, now = Date.now()) {
+    const readIds = [];
+    this.transaction(() => {
+      for (const id of ids) {
+        const res = this.db
+          .prepare(
+            'UPDATE group_message_receipts SET read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE message_id = ? AND user_id = ? AND read_at IS NULL',
+          )
+          .run(now, now, id, userId);
+        if (res.changes > 0) readIds.push(id);
+      }
+    });
+    return readIds;
+  }
+
+  getGroupMessageSender(messageId) {
+    const row = this.db
+      .prepare('SELECT sender_id FROM group_messages WHERE id = ?')
+      .get(messageId);
+    return row ? row.sender_id : null;
+  }
+
+  cleanupExpiredGroupMessages(now = Date.now()) {
+    const ids = this.db
+      .prepare('SELECT id FROM group_messages WHERE expires_at < ?')
+      .all(now)
+      .map((row) => row.id);
+    if (ids.length === 0) return 0;
+    this.transaction(() => {
+      for (const id of ids) {
+        this.db
+          .prepare('DELETE FROM group_message_receipts WHERE message_id = ?')
+          .run(id);
+      }
+      const placeholders = ids.map(() => '?').join(',');
+      this.db
+        .prepare(`DELETE FROM group_messages WHERE id IN (${placeholders})`)
+        .run(...ids);
+    });
+    return ids.length;
+  }
+
   deleteUser(id) {
     const user = this.getUserById(id);
     if (!user) return false;
@@ -651,6 +934,11 @@ class CoralinkDatabase {
       this.db.prepare('DELETE FROM prekeys WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM push_tokens WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM auth_codes WHERE phone = ?').run(user.phone);
+      // Group membership: drop the user's receipts and membership rows.
+      this.db
+        .prepare('DELETE FROM group_message_receipts WHERE user_id = ?')
+        .run(id);
+      this.db.prepare('DELETE FROM group_members WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM users WHERE id = ?').run(id);
     });
     return true;
