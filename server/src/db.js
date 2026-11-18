@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS group_message_receipts (
   PRIMARY KEY(message_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS key_backup (
+  user_id TEXT PRIMARY KEY,
+  blob TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_delivered
   ON messages(recipient_id, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
@@ -563,11 +570,36 @@ class CoralinkDatabase {
     });
   }
 
+  // Encrypted Signal-state backup: the server stores only an opaque ciphertext
+  // blob + KDF salt. It cannot read the keys; a new device decrypts them with a
+  // key derived from the account password.
+  saveBackup(userId, blob, salt, updatedAt) {
+    this.db
+      .prepare(
+        `INSERT INTO key_backup (user_id, blob, salt, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           blob = excluded.blob, salt = excluded.salt, updated_at = excluded.updated_at`,
+      )
+      .run(userId, blob, salt, updatedAt);
+  }
+
+  getBackup(userId) {
+    const row = this.db
+      .prepare('SELECT blob, salt, updated_at FROM key_backup WHERE user_id = ?')
+      .get(userId);
+    if (!row) return null;
+    return { blob: row.blob, salt: row.salt, updatedAt: Number(row.updated_at) };
+  }
+
+  deleteBackup(userId) {
+    this.db.prepare('DELETE FROM key_backup WHERE user_id = ?').run(userId);
+  }
+
   replenishPreKeys(userId, preKeys) {
     this.transaction(() => {
       for (const preKey of preKeys) {
-        this.stmts.upsertPreKey.run(userId, preKey.id, preKey.publicKey);
-      }
+        this.stmts.upsertPreKey.run(userId, preKey.id, preKey.publicKey);      }
     });
   }
 
@@ -947,6 +979,7 @@ class CoralinkDatabase {
         .run(id, id);
       this.db.prepare('DELETE FROM prekeys WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM push_tokens WHERE user_id = ?').run(id);
+      this.db.prepare('DELETE FROM key_backup WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM auth_codes WHERE phone = ?').run(user.phone);
       // Group membership: drop the user's receipts and membership rows.
       this.db

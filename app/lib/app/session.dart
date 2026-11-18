@@ -8,6 +8,7 @@ import '../data/api_client.dart';
 import '../domain/models.dart';
 import '../network/call.dart';
 import '../network/realtime.dart';
+import '../security/key_backup.dart';
 import '../services/keep_alive.dart';
 import 'client_bundle.dart';
 import 'dependencies.dart';
@@ -34,6 +35,10 @@ class SessionState {
 }
 
 class SessionController extends Notifier<SessionState> {
+  // Held only for the duration of a login/registration so the encrypted key
+  // backup can be derived and (re)uploaded; never persisted to disk.
+  String? _sessionPassword;
+
   @override
   SessionState build() {
     Future.microtask(_restore);
@@ -102,6 +107,7 @@ class SessionController extends Notifier<SessionState> {
     final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
     try {
       final auth = await api.register(username, password: password, name: name);
+      _sessionPassword = password;
       await ref.read(secureStoreProvider).setToken(auth.token);
       await ref.read(localStoreProvider).upsertUser(auth.user);
       if (auth.isNew) {
@@ -122,11 +128,52 @@ class SessionController extends Notifier<SessionState> {
     final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
     try {
       final auth = await api.login(username, password);
+      _sessionPassword = password;
       await ref.read(secureStoreProvider).setToken(auth.token);
       await ref.read(localStoreProvider).upsertUser(auth.user);
+      // Restore the encrypted key backup (if any) BEFORE SignalService.load so
+      // this device reuses the existing identity instead of minting a new one.
+      await _restoreBackup(api, auth.user.id, password);
       await _activate(auth.user, auth.token);
     } finally {
       api.close();
+    }
+  }
+
+  Future<void> _restoreBackup(
+    ApiClient api,
+    String userId,
+    String password,
+  ) async {
+    try {
+      final backup = await api.fetchBackup();
+      if (backup == null) return;
+      final restored = await KeyBackup(ref.read(secureStoreProvider)).restore(
+        userId: userId,
+        password: password,
+        blob: backup.blob,
+        salt: backup.salt,
+      );
+      if (!restored) {
+        Log.d('backup', 'Backup present but password did not decrypt it');
+      }
+    } catch (error) {
+      Log.d('backup', 'Restore skipped: $error');
+    }
+  }
+
+  Future<void> _syncBackup(ClientBundle bundle, String userId) async {
+    final password = _sessionPassword;
+    if (password == null) return;
+    try {
+      final backup = KeyBackup(bundle.secure);
+      await backup.primeKeyFromPassword(password);
+      final built = await backup.build(userId);
+      if (built != null) {
+        await bundle.api.uploadBackup(blob: built.blob, salt: built.salt);
+      }
+    } catch (error) {
+      Log.d('backup', 'Backup upload deferred: $error');
     }
   }
 
@@ -205,6 +252,7 @@ class SessionController extends Notifier<SessionState> {
       pendingToken: token,
     );
     unawaited(startKeepAlive());
+    unawaited(_syncBackup(bundle, user.id));
   }
 
   Future<void> deleteAccount() async {
@@ -223,6 +271,7 @@ class SessionController extends Notifier<SessionState> {
     if (client != null) {
       await client.dispose();
     }
+    _sessionPassword = null;
     final secure = ref.read(secureStoreProvider);
     await secure.setToken(null);
     // Signal identity stays in secure storage so a re-login on this device

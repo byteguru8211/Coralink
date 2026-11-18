@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/config.dart';
+import '../core/log.dart';
 import '../data/api_client.dart';
 import '../data/local_store.dart';
 import '../data/secure_store.dart';
@@ -9,6 +10,7 @@ import '../network/call.dart';
 import '../network/p2p.dart';
 import '../network/realtime.dart';
 import '../security/group_crypto.dart';
+import '../security/key_backup.dart';
 import '../security/signal_service.dart';
 import '../services/echo.dart';
 import '../services/message_service.dart';
@@ -59,6 +61,7 @@ class ClientBundle {
     }
     final signal = await SignalService.load(secure: secure, api: api, userId: user.id);
     final groupCrypto = GroupCrypto(secure);
+    final keyBackup = KeyBackup(secure);
     final realtime = RealtimeService(config.wsUrl, token);
     final call = CallService(config, realtime)..identify(user.id);
     final p2p = P2PManager(config, realtime);
@@ -82,6 +85,16 @@ class ClientBundle {
       if (status == RealtimeStatus.connected) {
         unawaited(signal.ensurePublished());
         unawaited(messages.flushOutbox());
+        // Keep the encrypted key backup current so a device that logs in later
+        // restores recent sessions/group keys. Uses the cached key (no password).
+        unawaited(() async {
+          try {
+            final built = await keyBackup.build(user.id);
+            if (built != null) await api.uploadBackup(blob: built.blob, salt: built.salt);
+          } catch (error) {
+            Log.d('backup', 'Refresh deferred: $error');
+          }
+        }());
       }
     });
     unawaited(messages.syncQueue());

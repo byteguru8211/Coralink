@@ -333,6 +333,26 @@ class ApiClient {
   Future<KeyBundleDto> fetchKeyBundle(String userId) async =>
       KeyBundleDto.fromJson(await _send('GET', '/keys/$userId'));
 
+  Future<void> uploadBackup({
+    required String blob,
+    required String salt,
+  }) =>
+      _send('PUT', '/backup', body: {'blob': blob, 'salt': salt});
+
+  /// Returns the stored encrypted backup, or null when none exists yet.
+  Future<({String blob, String salt})?> fetchBackup() async {
+    try {
+      final json = await _send('GET', '/backup');
+      return (
+        blob: json['blob'] as String,
+        salt: json['salt'] as String,
+      );
+    } on ApiException catch (error) {
+      if (error.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<List<IncomingMessageDto>> queuedMessages() async {
     final json = await _send('GET', '/messages/queued');
     return (json['messages'] as List)

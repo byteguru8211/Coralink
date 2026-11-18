@@ -19,6 +19,12 @@ class SecureStore {
 
   Future<void> delete(String key) => _storage.delete(key: '$_prefix$key');
 
+  static const String prefix = _prefix;
+
+  /// All stored entries (keys include the internal namespace prefix). Used by
+  /// the key-backup service to enumerate group keys.
+  Future<Map<String, String>> readAll() => _storage.readAll();
+
   Future<String> databaseKey() async {
     final existing = await read('db.key');
     if (existing != null && existing.length >= 32) return existing;
