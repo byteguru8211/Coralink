@@ -432,8 +432,11 @@ class ContactsController extends Notifier<ContactsState> {
   }
 
   Future<List<User>> search(String query) async {
-    if (query.trim().length < 2) return const [];
-    final users = await ref.read(clientProvider).api.searchUsers(query.trim());
+    final trimmed = query.trim();
+    // Allow searching by @nickname as well as by display name.
+    final normalized = trimmed.startsWith('@') ? trimmed.substring(1).trim() : trimmed;
+    if (normalized.length < 2) return const [];
+    final users = await ref.read(clientProvider).api.searchUsers(normalized);
     final me = ref.read(sessionProvider).user?.id;
     return users.where((user) => user.id != me).toList();
   }

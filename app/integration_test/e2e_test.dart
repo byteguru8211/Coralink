@@ -85,7 +85,7 @@ Future<List<IncomingMessageDto>> _waitForQueue(
 Future<TestClient> _connect(String username) async {
   final config = _config();
   final api = ApiClient(baseUrl: config.apiBaseUrl);
-  final auth = await api.identify(username, name: username);
+  final auth = await api.register(username, password: 'test-password-123', name: username);
   final secure = FakeSecureStore();
   final store = MemoryLocalStore();
   final signal = await SignalService.load(

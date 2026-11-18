@@ -6,7 +6,22 @@ const MAX_NAME_LENGTH = 64;
 const MAX_ABOUT_LENGTH = 280;
 const USERNAME_MIN_LENGTH = 3;
 const USERNAME_MAX_LENGTH = 32;
+const PASSWORD_MIN_LENGTH = 6;
+const PASSWORD_MAX_LENGTH = 256;
 const MAX_AVATAR_BYTES = 500 * 1024;
+
+/**
+ * Validates a login password. Returns the password unchanged when it meets the
+ * length policy, or null when invalid. Whitespace is preserved (not trimmed) so
+ * a password is exactly what the user typed.
+ */
+function normalizePassword(input) {
+  if (typeof input !== 'string') return null;
+  if (input.length < PASSWORD_MIN_LENGTH || input.length > PASSWORD_MAX_LENGTH) {
+    return null;
+  }
+  return input;
+}
 
 /**
  * Normalizes a profile photo supplied as a base64 data URL. Returns '' to clear
@@ -184,6 +199,7 @@ module.exports = {
   normalizeAbout,
   normalizeAvatar,
   normalizeName,
+  normalizePassword,
   normalizePhone,
   normalizeUsername,
   toSafeInteger,

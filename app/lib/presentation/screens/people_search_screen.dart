@@ -146,7 +146,9 @@ class _PeopleSearchScreenState extends ConsumerState<PeopleSearchScreen> {
                           ),
                         ),
                         subtitle: Text(
-                          user.about.isNotEmpty ? user.about : maskPhone(user.phone),
+                          user.username.isNotEmpty
+                              ? '@${user.username}'
+                              : (user.about.isNotEmpty ? user.about : maskPhone(user.phone)),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(color: palette.textMuted, fontSize: 12.5),

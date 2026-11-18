@@ -92,10 +92,14 @@ class SessionController extends Notifier<SessionState> {
     await _restore();
   }
 
-  Future<void> identify(String username, {String? name}) async {
+  Future<void> register(
+    String username, {
+    required String password,
+    String? name,
+  }) async {
     final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
     try {
-      final auth = await api.identify(username, name: name);
+      final auth = await api.register(username, password: password, name: name);
       await ref.read(secureStoreProvider).setToken(auth.token);
       await ref.read(localStoreProvider).upsertUser(auth.user);
       if (auth.isNew) {
@@ -107,6 +111,18 @@ class SessionController extends Notifier<SessionState> {
       } else {
         await _activate(auth.user, auth.token);
       }
+    } finally {
+      api.close();
+    }
+  }
+
+  Future<void> login(String username, String password) async {
+    final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
+    try {
+      final auth = await api.login(username, password);
+      await ref.read(secureStoreProvider).setToken(auth.token);
+      await ref.read(localStoreProvider).upsertUser(auth.user);
+      await _activate(auth.user, auth.token);
     } finally {
       api.close();
     }

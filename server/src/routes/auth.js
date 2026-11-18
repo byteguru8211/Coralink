@@ -8,7 +8,9 @@ const {
   constantTimeEqualHex,
   generateAuthCode,
   hashAuthCode,
+  hashPassword,
   signJwt,
+  verifyPassword,
 } = require('../auth');
 const { HttpError, sendJson } = require('../lib/http');
 const { maskPhone } = require('../lib/log');
@@ -16,6 +18,7 @@ const {
   isPlainObject,
   normalizeAbout,
   normalizeName,
+  normalizePassword,
   normalizePhone,
   normalizeUsername,
 } = require('../lib/validate');
@@ -178,13 +181,11 @@ function registerAuthRoutes(router) {
     { rateLimit: 'verify' },
   );
 
-  // Open registration/login by nickname. No verification code: a single
-  // request identifies an existing account or creates a new one. Intended for
-  // trusted-network deployments (e.g. a Tailscale tailnet); swap for a code or
-  // email flow before exposing this endpoint publicly.
+  // Register a new account by nickname + password. The password is hashed with
+  // scrypt; the server never stores it in plaintext.
   router.add(
     'POST',
-    '/api/v1/auth/identify',
+    '/api/v1/auth/register',
     async (context) => {
       const body = requireBody(context);
       const username = normalizeUsername(body.username);
@@ -195,8 +196,14 @@ function registerAuthRoutes(router) {
           'Username must be 3-32 characters (letters, digits, dot, underscore)',
         );
       }
-
-      const now = Date.now();
+      const password = normalizePassword(body.password);
+      if (password === null) {
+        throw new HttpError(
+          400,
+          'invalid_password',
+          'Password must be at least 6 characters',
+        );
+      }
       let requestedName;
       if (body.name !== undefined) {
         requestedName = normalizeName(body.name);
@@ -209,33 +216,56 @@ function registerAuthRoutes(router) {
         }
       }
 
-      let user = context.db.getUserByUsername(username);
-      let isNew = false;
-      if (!user) {
-        const fallbackName = requestedName || username;
-        const fallbackAbout =
-          body.about !== undefined && normalizeAbout(body.about) !== null
-            ? normalizeAbout(body.about)
-            : '';
-        user = context.db.createUser({
-          id: randomUUID(),
-          username,
-          name: fallbackName,
-          about: fallbackAbout,
-          avatarColor: '#1A9C7A',
-          createdAt: now,
-          lastSeen: now,
-        });
-        isNew = true;
-      } else if (requestedName !== undefined && requestedName !== user.name) {
-        user = context.db.updateUserProfile(user.id, { name: requestedName });
+      const now = Date.now();
+      if (context.db.getUserByUsername(username)) {
+        throw new HttpError(
+          409,
+          'username_taken',
+          'This nickname is already registered',
+        );
+      }
+      const user = context.db.createUser({
+        id: randomUUID(),
+        username,
+        name: requestedName || username,
+        about: '',
+        avatarColor: '#1A9C7A',
+        passwordHash: hashPassword(password),
+        createdAt: now,
+        lastSeen: now,
+      });
+
+      const token = signJwt(user, context.config.jwtSecret);
+      sendJson(context.res, 200, {
+        token,
+        user: toPrivateUser(user, context.hub),
+        isNew: true,
+      });
+    },
+    { rateLimit: 'verify' },
+  );
+
+  // Log in to an existing account by nickname + password.
+  router.add(
+    'POST',
+    '/api/v1/auth/login',
+    async (context) => {
+      const body = requireBody(context);
+      const username = normalizeUsername(body.username);
+      const password = typeof body.password === 'string' ? body.password : '';
+      if (!username || password.length === 0) {
+        throw new HttpError(401, 'invalid_credentials', 'Wrong nickname or password');
+      }
+      const user = context.db.getUserByUsername(username);
+      if (!user || !verifyPassword(password, user.passwordHash)) {
+        throw new HttpError(401, 'invalid_credentials', 'Wrong nickname or password');
       }
 
       const token = signJwt(user, context.config.jwtSecret);
       sendJson(context.res, 200, {
         token,
         user: toPrivateUser(user, context.hub),
-        isNew,
+        isNew: false,
       });
     },
     { rateLimit: 'verify' },

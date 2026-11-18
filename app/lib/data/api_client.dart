@@ -153,14 +153,35 @@ class ApiClient {
     }
   }
 
-  Future<AuthSession> identify(String username, {String? name}) async {
+  Future<AuthSession> register(
+    String username, {
+    required String password,
+    String? name,
+  }) async {
     final json = await _send(
       'POST',
-      '/auth/identify',
+      '/auth/register',
       body: {
         'username': username,
+        'password': password,
         if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
       },
+      auth: false,
+    );
+    final token = json['token'] as String;
+    _token = token;
+    return AuthSession(
+      token: token,
+      user: User.fromJson(json['user'] as Map<String, dynamic>),
+      isNew: json['isNew'] == true,
+    );
+  }
+
+  Future<AuthSession> login(String username, String password) async {
+    final json = await _send(
+      'POST',
+      '/auth/login',
+      body: {'username': username, 'password': password},
       auth: false,
     );
     final token = json['token'] as String;

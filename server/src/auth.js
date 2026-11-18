@@ -3,6 +3,8 @@
 const {
   createHmac,
   randomInt,
+  randomBytes,
+  scryptSync,
   timingSafeEqual,
 } = require('node:crypto');
 const { HttpError } = require('./lib/http');
@@ -11,6 +13,51 @@ const CODE_TTL_MS = 5 * 60 * 1000;
 const CODE_RESEND_MS = 60 * 1000;
 const CODE_MAX_ATTEMPTS = 5;
 const JWT_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+// scrypt parameters for password hashing (memory-hard, per-password salt).
+const SCRYPT_N = 16384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 32;
+const SCRYPT_MAXMEM = 64 * 1024 * 1024;
+
+function hashPassword(password) {
+  const salt = randomBytes(16);
+  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+    maxmem: SCRYPT_MAXMEM,
+  });
+  return [
+    'scrypt',
+    SCRYPT_N,
+    SCRYPT_R,
+    SCRYPT_P,
+    salt.toString('base64'),
+    derived.toString('base64'),
+  ].join('$');
+}
+
+function verifyPassword(password, stored) {
+  if (typeof stored !== 'string') return false;
+  const parts = stored.split('$');
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  const [, nStr, rStr, pStr, saltB64, hashB64] = parts;
+  try {
+    const salt = Buffer.from(saltB64, 'base64');
+    const expected = Buffer.from(hashB64, 'base64');
+    const derived = scryptSync(password, salt, expected.length, {
+      N: Number(nStr),
+      r: Number(rStr),
+      p: Number(pStr),
+      maxmem: SCRYPT_MAXMEM,
+    });
+    return derived.length === expected.length && timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
+}
 
 function generateAuthCode() {
   return String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -141,7 +188,9 @@ module.exports = {
   constantTimeEqualHex,
   generateAuthCode,
   hashAuthCode,
+  hashPassword,
   requireAuth,
   signJwt,
   verifyJwt,
+  verifyPassword,
 };

@@ -68,20 +68,22 @@ Amnezia и Tailscale — оба WireGuard, но в разных диапазон
 
 ## 4. Запуск сервера одной командой (домашний ПК)
 
-Скрипт: [`server/scripts/run-tailscale.ps1`](../server/scripts/run-tailscale.ps1).
-Он проверяет Node/Tailscale, поднимает `tailscale up` при необходимости,
-генерирует `server/.env` с криптостойкими секретами (JWT_SECRET, AUTH_PEPPER),
-ставит зависимости, запускает сервер на `127.0.0.1:8080` и публикует его через
-`tailscale serve`, а в конце печатает готовую ссылку.
+Скрипт в корне проекта: [`start-coralink.ps1`](../start-coralink.ps1) (+ ярлык
+двойного клика [`start-coralink.cmd`](../start-coralink.cmd)). Идемпотентен:
+проверяет Node/Tailscale, поднимает `tailscale up` при необходимости, генерирует
+`server/.env` с криптостойкими секретами (JWT_SECRET, AUTH_PEPPER), ставит
+зависимости, запускает сервер на `127.0.0.1:8080` (PID в `server/.server.pid`),
+публикует его через `tailscale serve` и печатает готовую ссылку.
 
 ```powershell
-cd <путь>\Coralink\server\scripts
-powershell -ExecutionPolicy Bypass -File .\run-tailscale.ps1
+# запуск (или двойной клик по start-coralink.cmd)
+powershell -ExecutionPolicy Bypass -File .\start-coralink.ps1
 ```
 
-Остановка:
+Остановка и статус:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\run-tailscale.ps1 -Stop
+powershell -ExecutionPolicy Bypass -File .\start-coralink.ps1 -Stop
+powershell -ExecutionPolicy Bypass -File .\start-coralink.ps1 -Status
 ```
 
 Переменные, которые скрипт пишет в `server/.env`:

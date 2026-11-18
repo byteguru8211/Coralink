@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   about TEXT DEFAULT '',
   avatar_color TEXT DEFAULT '#1A9C7A',
   avatar TEXT DEFAULT '',
+  password_hash TEXT,
   created_at INTEGER NOT NULL,
   last_seen INTEGER NOT NULL,
   identity_key TEXT,
@@ -85,6 +86,7 @@ function mapUser(row) {
     about: row.about || '',
     avatarColor: row.avatar_color || '#1A9C7A',
     avatar: row.avatar || '',
+    passwordHash: row.password_hash || null,
     presenceVisibility: row.presence_visibility || 'contacts',
     createdAt: row.created_at,
     lastSeen: row.last_seen,
@@ -167,6 +169,9 @@ class CoralinkDatabase {
     if (!userColumns.some((column) => column.name === 'avatar')) {
       this.db.exec("ALTER TABLE users ADD COLUMN avatar TEXT DEFAULT ''");
     }
+    if (!userColumns.some((column) => column.name === 'password_hash')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+    }
 
     this.stmts = {
       getUserById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -176,8 +181,8 @@ class CoralinkDatabase {
       ),
       insertUser: this.db.prepare(`
         INSERT INTO users
-          (id, phone, username, name, about, avatar_color, avatar, created_at, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, phone, username, name, about, avatar_color, avatar, password_hash, created_at, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       updateUserProfile: this.db.prepare(`
         UPDATE users
@@ -377,6 +382,7 @@ class CoralinkDatabase {
     about = '',
     avatarColor = '#1A9C7A',
     avatar = '',
+    passwordHash = null,
     createdAt = Date.now(),
     lastSeen = Date.now(),
   }) {
@@ -388,6 +394,7 @@ class CoralinkDatabase {
       about,
       avatarColor,
       avatar,
+      passwordHash,
       createdAt,
       lastSeen,
     );

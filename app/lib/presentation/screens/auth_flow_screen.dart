@@ -9,6 +9,8 @@ import '../../data/api_client.dart';
 import '../widgets/coral_widgets.dart';
 import 'privacy_policy_screen.dart';
 
+enum _AuthMode { register, login }
+
 class AuthFlowScreen extends ConsumerStatefulWidget {
   const AuthFlowScreen({super.key});
 
@@ -22,7 +24,11 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
   late final TextEditingController _username;
   late final TextEditingController _firstName;
   late final TextEditingController _lastName;
+  late final TextEditingController _password;
+  late final TextEditingController _confirm;
+  _AuthMode _mode = _AuthMode.register;
   bool _loading = false;
+  bool _showPassword = false;
   String? _error;
 
   @override
@@ -34,6 +40,8 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
     _username = TextEditingController();
     _firstName = TextEditingController();
     _lastName = TextEditingController();
+    _password = TextEditingController();
+    _confirm = TextEditingController();
   }
 
   @override
@@ -42,6 +50,8 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
     _username.dispose();
     _firstName.dispose();
     _lastName.dispose();
+    _password.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
@@ -71,6 +81,21 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
     return null;
   }
 
+  String? _validatePassword(String? value) {
+    final password = value ?? '';
+    if (password.length < 6) {
+      return ref.read(stringsProvider).get('passwordTooShort');
+    }
+    return null;
+  }
+
+  String? _validateConfirm(String? value) {
+    if (value != _password.text) {
+      return ref.read(stringsProvider).get('passwordsDiffer');
+    }
+    return null;
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() {
@@ -80,10 +105,18 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
     try {
       await ref.read(settingsProvider.notifier).setServerUrl(_url.text.trim());
       final username = _username.text.trim().toLowerCase();
-      final name = '${_firstName.text.trim()} ${_lastName.text.trim()}'.trim();
-      await ref
-          .read(sessionProvider.notifier)
-          .identify(username, name: name.isEmpty ? null : name);
+      if (_mode == _AuthMode.register) {
+        final name = '${_firstName.text.trim()} ${_lastName.text.trim()}'.trim();
+        await ref.read(sessionProvider.notifier).register(
+              username,
+              password: _password.text,
+              name: name.isEmpty ? null : name,
+            );
+      } else {
+        await ref
+            .read(sessionProvider.notifier)
+            .login(username, _password.text);
+      }
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() => _error = error.message);
@@ -96,12 +129,13 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
   Widget build(BuildContext context) {
     final strings = ref.watch(stringsProvider);
     final palette = context.palette;
+    final isRegister = _mode == _AuthMode.register;
     return Scaffold(
       body: CoralBackground(
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(24, 30, 24, 28),
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 440),
                 child: Form(
@@ -109,41 +143,37 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const SizedBox(height: 10),
-                      const Center(child: CoralMark(size: 64)),
-                      const SizedBox(height: 30),
-                      Text(
-                        strings.get('welcomeTitle'),
-                        style: TextStyle(
-                          color: palette.textPrimary,
-                          fontSize: 28,
-                          height: 1.16,
-                          fontWeight: FontWeight.w300,
-                          letterSpacing: -0.5,
+                      const SizedBox(height: 6),
+                      const Center(child: CoralMark(size: 56)),
+                      const SizedBox(height: 22),
+                      Center(
+                        child: SegmentedButton<_AuthMode>(
+                          segments: [
+                            ButtonSegment(
+                              value: _AuthMode.register,
+                              label: Text(strings.get('createAccount')),
+                            ),
+                            ButtonSegment(
+                              value: _AuthMode.login,
+                              label: Text(strings.get('signIn')),
+                            ),
+                          ],
+                          selected: {_mode},
+                          onSelectionChanged: (s) => setState(() {
+                            _mode = s.first;
+                            _error = null;
+                          }),
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        strings.get('welcomeSubtitle'),
-                        style: TextStyle(
-                          color: palette.textMuted,
-                          fontSize: 14.5,
-                          height: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 24),
                       TextFormField(
                         controller: _url,
-                        autofillHints: const [AutofillHints.url],
                         keyboardType: TextInputType.url,
                         textInputAction: TextInputAction.next,
                         autocorrect: false,
                         enabled: !_loading,
                         validator: _validateUrl,
-                        style: TextStyle(
-                          color: palette.textPrimary,
-                          fontSize: 15,
-                        ),
+                        style: TextStyle(color: palette.textPrimary, fontSize: 15),
                         decoration: InputDecoration(
                           labelText: strings.get('serverLink'),
                           hintText: 'https://host.tailnet.ts.net',
@@ -152,7 +182,7 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
                           helperMaxLines: 3,
                         ),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 16),
                       TextFormField(
                         controller: _username,
                         textInputAction: TextInputAction.next,
@@ -172,45 +202,84 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 18),
-                      TextFormField(
-                        controller: _firstName,
-                        textCapitalization: TextCapitalization.words,
-                        textInputAction: TextInputAction.next,
-                        enabled: !_loading,
-                        style: TextStyle(color: palette.textPrimary),
-                        decoration: InputDecoration(
-                          labelText: strings.get('firstName'),
-                          prefixIcon: Icon(
-                            Icons.person_outline_rounded,
-                            color: palette.accent,
+                      if (isRegister) ...[
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _firstName,
+                          textCapitalization: TextCapitalization.words,
+                          textInputAction: TextInputAction.next,
+                          enabled: !_loading,
+                          style: TextStyle(color: palette.textPrimary),
+                          decoration: InputDecoration(
+                            labelText: strings.get('firstName'),
+                            prefixIcon: Icon(
+                              Icons.person_outline_rounded,
+                              color: palette.accent,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 18),
-                      TextFormField(
-                        controller: _lastName,
-                        textCapitalization: TextCapitalization.words,
-                        textInputAction: TextInputAction.done,
-                        enabled: !_loading,
-                        onFieldSubmitted: (_) => _submit(),
-                        style: TextStyle(color: palette.textPrimary),
-                        decoration: InputDecoration(
-                          labelText: strings.get('lastName'),
-                          prefixIcon: Icon(
-                            Icons.person_outline_rounded,
-                            color: palette.accentSoft,
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _lastName,
+                          textCapitalization: TextCapitalization.words,
+                          textInputAction: TextInputAction.next,
+                          enabled: !_loading,
+                          style: TextStyle(color: palette.textPrimary),
+                          decoration: InputDecoration(
+                            labelText: strings.get('lastName'),
+                            prefixIcon: Icon(
+                              Icons.person_outline_rounded,
+                              color: palette.accentSoft,
+                            ),
                           ),
-                        ),
-                      ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 14),
-                        Text(
-                          _error!,
-                          style: TextStyle(color: palette.coral, fontSize: 13),
                         ),
                       ],
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _password,
+                        obscureText: !_showPassword,
+                        textInputAction: isRegister ? TextInputAction.next : TextInputAction.done,
+                        enabled: !_loading,
+                        validator: _validatePassword,
+                        style: TextStyle(color: palette.textPrimary),
+                        decoration: InputDecoration(
+                          labelText: strings.get('password'),
+                          prefixIcon: Icon(Icons.lock_outline_rounded, color: palette.accent),
+                          suffixIcon: IconButton(
+                            onPressed: () => setState(() => _showPassword = !_showPassword),
+                            icon: Icon(
+                              _showPassword
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                              color: palette.textMuted,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (isRegister) ...[
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _confirm,
+                          obscureText: !_showPassword,
+                          textInputAction: TextInputAction.done,
+                          enabled: !_loading,
+                          validator: _validateConfirm,
+                          onFieldSubmitted: (_) => _submit(),
+                          style: TextStyle(color: palette.textPrimary),
+                          decoration: InputDecoration(
+                            labelText: strings.get('confirmPassword'),
+                            prefixIcon: Icon(
+                              Icons.lock_outline_rounded,
+                              color: palette.accentSoft,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (_error != null) ...[
+                        const SizedBox(height: 14),
+                        Text(_error!, style: TextStyle(color: palette.coral, fontSize: 13)),
+                      ],
+                      const SizedBox(height: 22),
                       FilledButton(
                         onPressed: _loading ? null : _submit,
                         child: _loading
@@ -222,9 +291,11 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
                                   color: Colors.white,
                                 ),
                               )
-                            : Text(strings.get('continue')),
+                            : Text(isRegister
+                                ? strings.get('createAccount')
+                                : strings.get('signIn')),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       Center(
                         child: TextButton(
                           onPressed: () => Navigator.of(context).push(
@@ -234,10 +305,7 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
                           ),
                           child: Text(
                             strings.get('privacyPolicy'),
-                            style: TextStyle(
-                              color: palette.textMuted,
-                              fontSize: 12,
-                            ),
+                            style: TextStyle(color: palette.textMuted, fontSize: 12),
                           ),
                         ),
                       ),
@@ -246,18 +314,11 @@ class _AuthFlowScreenState extends ConsumerState<AuthFlowScreen> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              Icons.lock_outline_rounded,
-                              size: 13,
-                              color: palette.textMuted,
-                            ),
+                            Icon(Icons.lock_outline_rounded, size: 13, color: palette.textMuted),
                             const SizedBox(width: 6),
                             Text(
                               strings.get('encryptionNotice'),
-                              style: TextStyle(
-                                color: palette.textMuted,
-                                fontSize: 11.5,
-                              ),
+                              style: TextStyle(color: palette.textMuted, fontSize: 11.5),
                             ),
                           ],
                         ),
