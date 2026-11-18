@@ -341,6 +341,56 @@ class MessagesController extends Notifier<MessagesState> {
     }
   }
 
+  Future<void> sendAudio(
+    String base64Data,
+    String mime,
+    int size,
+    int durationMs,
+  ) async {
+    final client = ref.read(clientProvider);
+    state = state.copyWith(sending: true, error: null);
+    try {
+      await client.messages.sendAudio(
+        chatId,
+        base64Data: base64Data,
+        mime: mime,
+        size: size,
+        durationMs: durationMs,
+      );
+      await _load();
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+      rethrow;
+    } finally {
+      if (ref.mounted) state = state.copyWith(sending: false);
+    }
+  }
+
+  Future<void> sendVideo(
+    String base64Data,
+    String mime,
+    String name,
+    int size,
+  ) async {
+    final client = ref.read(clientProvider);
+    state = state.copyWith(sending: true, error: null);
+    try {
+      await client.messages.sendVideo(
+        chatId,
+        base64Data: base64Data,
+        mime: mime,
+        name: name,
+        size: size,
+      );
+      await _load();
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+      rethrow;
+    } finally {
+      if (ref.mounted) state = state.copyWith(sending: false);
+    }
+  }
+
   Future<void> react(String messageId, String emoji) async {
     await ref.read(clientProvider).messages.sendReaction(chatId, messageId, emoji);
   }

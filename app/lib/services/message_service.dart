@@ -173,7 +173,12 @@ class MessageService {
         ? MessageKind.image
         : type == 'file'
             ? MessageKind.file
-            : MessageKind.text;
+            : type == 'audio'
+                ? MessageKind.audio
+                : type == 'video'
+                    ? MessageKind.video
+                    : MessageKind.text;
+    final hasData = type == 'file' || type == 'audio' || type == 'video';
     final message = Message(
       id: id,
       chatId: groupId,
@@ -182,7 +187,7 @@ class MessageService {
       kind: messageKind,
       status: isActive ? MessageStatus.read : MessageStatus.delivered,
       createdAt: createdAt,
-      meta: messageKind == MessageKind.file ? {...meta, if (fileData != null) 'data': fileData} : meta,
+      meta: hasData ? {...meta, if (fileData != null) 'data': fileData} : meta,
       imageBase64: image,
     );
     await store.upsertMessage(message);
@@ -190,7 +195,11 @@ class MessageService {
         ? 'Фото'
         : messageKind == MessageKind.file
             ? 'Файл'
-            : text;
+            : messageKind == MessageKind.audio
+                ? 'Голосовое'
+                : messageKind == MessageKind.video
+                    ? 'Видео'
+                    : text;
     await store.touchChat(groupId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) {
       await store.markChatRead(groupId);
@@ -379,6 +388,71 @@ class MessageService {
         'data': base64Data,
         'meta': {'mime': mime, 'name': name, 'size': size},
         'text': caption,
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  Future<Message> sendAudio(
+    String chatId, {
+    required String base64Data,
+    required String mime,
+    required int size,
+    required int durationMs,
+  }) async {
+    if (size > _maxRawFileBytes) {
+      throw ArgumentError('file_too_large');
+    }
+    return _sendEnvelope(
+      chatId: chatId,
+      kind: MessageKind.audio,
+      preview: 'Голосовое',
+      meta: {
+        'mime': mime,
+        'name': 'voice',
+        'size': size,
+        'durationMs': durationMs,
+        'data': base64Data,
+      },
+      envelope: {
+        'v': 1,
+        'type': 'audio',
+        'data': base64Data,
+        'meta': {'mime': mime, 'size': size, 'durationMs': durationMs},
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  Future<Message> sendVideo(
+    String chatId, {
+    required String base64Data,
+    required String mime,
+    required String name,
+    required int size,
+    int durationMs = 0,
+  }) async {
+    if (size > _maxRawFileBytes) {
+      throw ArgumentError('file_too_large');
+    }
+    return _sendEnvelope(
+      chatId: chatId,
+      kind: MessageKind.video,
+      preview: 'Видео',
+      meta: {
+        'mime': mime,
+        'name': name,
+        'size': size,
+        'durationMs': durationMs,
+        'data': base64Data,
+      },
+      envelope: {
+        'v': 1,
+        'type': 'video',
+        'data': base64Data,
+        'meta': {'mime': mime, 'name': name, 'size': size, 'durationMs': durationMs},
+        'text': '',
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
@@ -823,7 +897,12 @@ class MessageService {
         ? MessageKind.image
         : type == 'file'
             ? MessageKind.file
-            : MessageKind.text;
+            : type == 'audio'
+                ? MessageKind.audio
+                : type == 'video'
+                    ? MessageKind.video
+                    : MessageKind.text;
+    final hasData = type == 'file' || type == 'audio' || type == 'video';
     final message = Message(
       id: id,
       chatId: senderId,
@@ -832,7 +911,7 @@ class MessageService {
       kind: kind,
       status: isActive ? MessageStatus.read : MessageStatus.delivered,
       createdAt: createdAt,
-      meta: kind == MessageKind.file ? {...meta, if (fileData != null) 'data': fileData} : meta,
+      meta: hasData ? {...meta, if (fileData != null) 'data': fileData} : meta,
       imageBase64: image,
     );
     await store.upsertMessage(message);
@@ -840,7 +919,11 @@ class MessageService {
         ? 'Фото'
         : kind == MessageKind.file
             ? 'Файл'
-            : text;
+            : kind == MessageKind.audio
+                ? 'Голосовое'
+                : kind == MessageKind.video
+                    ? 'Видео'
+                    : text;
     await store.touchChat(senderId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) await store.markChatRead(senderId);
     if (ack && viaRelay) {

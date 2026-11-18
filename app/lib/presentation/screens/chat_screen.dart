@@ -18,12 +18,13 @@ import '../../domain/models.dart';
 import '../../network/realtime.dart';
 import '../../security/signal_service.dart';
 import '../../services/audio_service.dart';
+import '../../services/voice_recorder.dart';
 import '../controllers.dart';
 import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
 import 'call_screen.dart';
 
-enum _Attach { gallery, camera, file }
+enum _Attach { gallery, camera, file, video }
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.chatId, this.initialTitle});
@@ -43,6 +44,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _sendPulse = false;
   int _lastCount = 0;
   AudioService? _audio;
+  VoiceRecorder? _recorder;
+  bool _recording = false;
+  int _recordSeconds = 0;
+  Timer? _recordTimer;
 
   @override
   void initState() {
@@ -59,11 +64,68 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _text.dispose();
     _focus.dispose();
     _scroll.dispose();
+    _recordTimer?.cancel();
+    if (_recording) {
+      _recorder?.cancel();
+    }
+    _recorder?.dispose();
     // Stop the ambient rustle when leaving the chat. `ref` is unusable in
     // dispose, so the service was captured in initState.
     _rustling = false;
     _audio?.stopRustle();
     super.dispose();
+  }
+
+  Future<void> _toggleRecord() async {
+    final strings = ref.read(stringsProvider);
+    if (_recording) {
+      _recordTimer?.cancel();
+      try {
+        final recording = await _recorder!.stop();
+        setState(() {
+          _recording = false;
+          _recordSeconds = 0;
+        });
+        await ref.read(messagesProvider(widget.chatId).notifier).sendAudio(
+              base64Encode(recording.bytes),
+              recording.mimeType,
+              recording.bytes.length,
+              recording.durationMs,
+            );
+        _scrollToBottom();
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_errorText(error, strings))),
+        );
+      }
+      return;
+    }
+    _recorder ??= VoiceRecorder();
+    try {
+      final granted = await _recorder!.hasPermission();
+      if (!granted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.get('micPermissionRequired'))),
+        );
+        return;
+      }
+      await _recorder!.start();
+      setState(() {
+        _recording = true;
+        _recordSeconds = 0;
+      });
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        setState(() => _recordSeconds++);
+        if (_recordSeconds >= 120) _toggleRecord();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
   }
 
   void _scrollToBottom({bool animate = true}) {
@@ -373,69 +435,117 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            IconButton(
-              onPressed: () => _showAttachments(strings),
-              icon: Icon(Icons.add_circle_outline_rounded, color: palette.accentSoft),
-            ),
-            Expanded(
-              child: TextField(
-                controller: _text,
-                focusNode: _focus,
-                minLines: 1,
-                maxLines: 4,
-                textCapitalization: TextCapitalization.sentences,
-                style: TextStyle(color: palette.textPrimary, fontSize: 15),
-                decoration: InputDecoration(
-                  hintText: strings.get('messageHint'),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-                onChanged: (value) {
-                  setState(() => _canSend = value.trim().isNotEmpty);
-                  ref.read(messagesProvider(widget.chatId).notifier).onTextChanged(value);
-                },
-                onSubmitted: (_) => _send(strings),
+            if (!_recording)
+              IconButton(
+                onPressed: () => _showAttachments(strings),
+                icon: Icon(Icons.add_circle_outline_rounded, color: palette.accentSoft),
               ),
+            Expanded(
+              child: _recording
+                  ? Container(
+                      height: 48,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      alignment: Alignment.centerLeft,
+                      decoration: BoxDecoration(
+                        color: palette.inputFill,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.mic_rounded, color: palette.coral),
+                          const SizedBox(width: 10),
+                          Text(
+                            '${_recordSeconds ~/ 60}:${(_recordSeconds % 60).toString().padLeft(2, '0')}',
+                            style: TextStyle(
+                              color: palette.textPrimary,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              strings.get('recording'),
+                              style: TextStyle(color: palette.textMuted, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : TextField(
+                      controller: _text,
+                      focusNode: _focus,
+                      minLines: 1,
+                      maxLines: 4,
+                      textCapitalization: TextCapitalization.sentences,
+                      style: TextStyle(color: palette.textPrimary, fontSize: 15),
+                      decoration: InputDecoration(
+                        hintText: strings.get('messageHint'),
+                        isDense: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      ),
+                      onChanged: (value) {
+                        setState(() => _canSend = value.trim().isNotEmpty);
+                        ref
+                            .read(messagesProvider(widget.chatId).notifier)
+                            .onTextChanged(value);
+                      },
+                      onSubmitted: (_) => _send(strings),
+                    ),
             ),
             const SizedBox(width: 6),
-            GestureDetector(
-              onTap: _canSend ? () => _send(strings) : null,
-              child: AnimatedScale(
-                scale: _sendPulse ? 1.18 : 1,
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOutBack,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
+            if (_recording)
+              GestureDetector(
+                onTap: _toggleRecord,
+                child: Container(
                   width: 46,
                   height: 46,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: _canSend
-                        ? LinearGradient(
-                            colors: [palette.accent, palette.accentSoft],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          )
-                        : null,
-                    color: _canSend ? null : palette.surfaceElevated,
-                    boxShadow: _canSend
-                        ? [
-                            BoxShadow(
-                              color: palette.accent.withValues(alpha: 0.4),
-                              blurRadius: 14,
-                              offset: const Offset(0, 4),
-                            ),
-                          ]
-                        : null,
+                    color: palette.coral,
                   ),
-                  child: Icon(
-                    Icons.arrow_upward_rounded,
-                    color: _canSend ? Colors.white : palette.textMuted,
-                    size: 22,
+                  child: const Icon(Icons.stop_rounded, color: Colors.white, size: 22),
+                ),
+              )
+            else if (_canSend)
+              GestureDetector(
+                onTap: () => _send(strings),
+                child: AnimatedScale(
+                  scale: _sendPulse ? 1.18 : 1,
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutBack,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [palette.accent, palette.accentSoft],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: palette.accent.withValues(alpha: 0.4),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.arrow_upward_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
                   ),
                 ),
+              )
+            else
+              IconButton(
+                onPressed: _toggleRecord,
+                icon: Icon(Icons.mic_rounded, color: palette.accentSoft),
               ),
-            ),
           ],
         ),
       ),
@@ -488,6 +598,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               title: strings.get('file'),
               onTap: () => Navigator.pop(context, _Attach.file),
             ),
+            SettingsTile(
+              icon: Icons.videocam_rounded,
+              title: strings.get('videoMessage'),
+              onTap: () => Navigator.pop(context, _Attach.video),
+            ),
             const SizedBox(height: 8),
           ],
         ),
@@ -500,6 +615,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         await _pickImage(ImageSource.camera, strings);
       case _Attach.file:
         await _pickFile(strings);
+      case _Attach.video:
+        await _pickVideo(strings);
       case null:
         break;
     }
@@ -582,6 +699,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       };
     }
     return strings.get('networkError');
+  }
+
+  Future<void> _pickVideo(AppStrings strings) async {
+    try {
+      final files = await FilePicker.pickFiles(type: FileType.video);
+      if (files.isEmpty) return;
+      final picked = files.single;
+      final bytes = await picked.readAsBytes();
+      if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.get('fileTooLarge'))),
+        );
+        return;
+      }
+      final mime = picked.extension != null
+          ? (lookupMimeType('x.${picked.extension}') ?? 'video/mp4')
+          : 'video/mp4';
+      await ref.read(messagesProvider(widget.chatId).notifier).sendVideo(
+            base64Encode(bytes),
+            mime,
+            picked.name,
+            bytes.lengthInBytes,
+          );
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
   }
 
   Future<void> _saveFile(Message message, AppStrings strings) async {

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_colors.dart';
@@ -121,7 +122,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                 ),
               ),
             if (message.isImage) const SizedBox(height: 6),
-            if (message.isFile)
+            if (message.isAudio) _AudioBubble(message: message, mine: mine),
+            if (message.isAudio && message.text.isNotEmpty) const SizedBox(height: 6),
+            if (message.isFile || message.isVideo)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: InkWell(
@@ -179,7 +182,7 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                   ),
                 ),
               ),
-            if (message.isFile && message.text.isNotEmpty) const SizedBox(height: 6),
+            if ((message.isFile || message.isVideo) && message.text.isNotEmpty) const SizedBox(height: 6),
             if (message.text.isNotEmpty)
               Text(
                 message.text,
@@ -502,4 +505,116 @@ class ChatTile extends StatelessWidget {
       child: content,
     );
   }
+}
+
+class _AudioBubble extends StatefulWidget {
+  const _AudioBubble({required this.message, required this.mine});
+  final Message message;
+  final bool mine;
+
+  @override
+  State<_AudioBubble> createState() => _AudioBubbleState();
+}
+
+class _AudioBubbleState extends State<_AudioBubble> {
+  final AudioPlayer _player = AudioPlayer();
+  bool _playing = false;
+  Duration _pos = Duration.zero;
+  Duration _dur = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    final ms = (widget.message.meta['durationMs'] as num?)?.toInt() ?? 0;
+    _dur = Duration(milliseconds: ms);
+    _player.onPositionChanged.listen((p) {
+      if (mounted) setState(() => _pos = p);
+    });
+    _player.onDurationChanged.listen((d) {
+      if (mounted && d > Duration.zero) setState(() => _dur = d);
+    });
+    _player.onPlayerComplete.listen((_) {
+      if (mounted) {
+        setState(() {
+          _playing = false;
+          _pos = Duration.zero;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    if (_playing) {
+      await _player.pause();
+      if (mounted) setState(() => _playing = false);
+      return;
+    }
+    final data = widget.message.meta['data'];
+    if (data is! String) return;
+    try {
+      await _player.play(BytesSource(base64Decode(data)));
+      if (mounted) setState(() => _playing = true);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final total = _dur.inMilliseconds;
+    final progress = total == 0 ? 0.0 : (_pos.inMilliseconds / total).clamp(0.0, 1.0);
+    final shown = (_playing || _pos > Duration.zero) ? _pos : _dur;
+    return SizedBox(
+      width: 220,
+      child: Row(
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: _toggle,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: (widget.mine ? palette.accent : palette.accentSoft)
+                    .withValues(alpha: 0.22),
+              ),
+              child: Icon(
+                _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                color: widget.mine ? palette.outgoingText : palette.accent,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 4,
+                backgroundColor: palette.divider,
+                valueColor: AlwaysStoppedAnimation(palette.accent),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _formatClock(shown),
+            style: TextStyle(
+              color: widget.mine ? palette.outgoingText : palette.textMuted,
+              fontSize: 11.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatClock(Duration d) =>
+      '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 }
