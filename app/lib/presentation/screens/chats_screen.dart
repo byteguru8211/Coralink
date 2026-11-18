@@ -11,6 +11,7 @@ import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
 import 'chat_screen.dart';
 import 'echo_screen.dart';
+import 'group_create_screen.dart';
 import 'people_search_screen.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
@@ -47,6 +48,13 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               MaterialPageRoute(builder: (_) => const EchoScreen()),
             ),
             icon: const Icon(Icons.search_rounded),
+          ),
+          IconButton(
+            tooltip: strings.get('newGroup'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const GroupCreateScreen()),
+            ),
+            icon: const Icon(Icons.group_add_rounded),
           ),
           IconButton(
             tooltip: strings.get('newChat'),

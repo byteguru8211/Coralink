@@ -139,6 +139,29 @@ class RealtimeService {
   void sendSignal(String to, Map<String, dynamic> data) =>
       sendRaw({'type': 'signal', 'to': to, 'data': data});
 
+  void sendGroupMessage({
+    required String id,
+    required String groupId,
+    required String ciphertext,
+    required String kind,
+    required Map<String, dynamic> meta,
+    required DateTime createdAt,
+  }) =>
+      sendRaw({
+        'type': 'group.send',
+        'id': id,
+        'groupId': groupId,
+        'ciphertext': ciphertext,
+        'kind': kind,
+        'meta': meta,
+        'createdAt': createdAt.millisecondsSinceEpoch,
+      });
+
+  void markGroupRead(String groupId, List<String> ids) {
+    if (ids.isEmpty) return;
+    sendRaw({'type': 'group.read', 'groupId': groupId, 'ids': ids});
+  }
+
   void typing(String to, bool on) =>
       sendRaw({'type': 'typing', 'to': to, 'on': on});
 

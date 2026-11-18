@@ -7,6 +7,7 @@ import '../data/secure_store.dart';
 import '../domain/models.dart';
 import '../network/p2p.dart';
 import '../network/realtime.dart';
+import '../security/group_crypto.dart';
 import '../security/signal_service.dart';
 import '../services/echo.dart';
 import '../services/message_service.dart';
@@ -20,6 +21,7 @@ class ClientBundle {
     required this.store,
     required this.api,
     required this.signal,
+    required this.groupCrypto,
     required this.realtime,
     required this.p2p,
     required this.messages,
@@ -31,6 +33,7 @@ class ClientBundle {
   final LocalStore store;
   final ApiClient api;
   final SignalService signal;
+  final GroupCrypto groupCrypto;
   final RealtimeService realtime;
   final P2PManager p2p;
   final MessageService messages;
@@ -52,12 +55,14 @@ class ClientBundle {
       // Offline start: the setting will be pushed on the next profile save.
     }
     final signal = await SignalService.load(secure: secure, api: api, userId: user.id);
+    final groupCrypto = GroupCrypto(secure);
     final realtime = RealtimeService(config.wsUrl, token);
     final p2p = P2PManager(config, realtime);
     final messages = MessageService(
       store: store,
       api: api,
       signal: signal,
+      groupCrypto: groupCrypto,
       realtime: realtime,
       p2p: p2p,
       myId: user.id,
@@ -77,12 +82,28 @@ class ClientBundle {
     });
     unawaited(messages.syncQueue());
 
+    // Register known groups as chats (keys are already in secure storage).
+    try {
+      final groups = await api.myGroups();
+      for (final group in groups) {
+        await store.upsertChat(Chat.group(
+          id: group.id,
+          title: group.title,
+          avatar: group.avatar,
+          memberCount: group.members.length,
+        ));
+      }
+    } catch (_) {
+      // Offline start: groups resync on the next connection.
+    }
+
     return ClientBundle._(
       config: config,
       secure: secure,
       store: store,
       api: api,
       signal: signal,
+      groupCrypto: groupCrypto,
       realtime: realtime,
       p2p: p2p,
       messages: messages,

@@ -129,6 +129,8 @@ class Chat {
     this.peerAbout = '',
     this.peerAvatarColor = '#1A9C7A',
     this.peerAvatar = '',
+    this.isGroup = false,
+    this.memberCount = 0,
     this.peerLastSeen,
     this.peerPresence = Presence.offline,
     this.lastMessageText = '',
@@ -147,6 +149,8 @@ class Chat {
   final String peerAbout;
   final String peerAvatarColor;
   final String peerAvatar;
+  final bool isGroup;
+  final int memberCount;
   final DateTime? peerLastSeen;
   final Presence peerPresence;
   final String lastMessageText;
@@ -165,6 +169,8 @@ class Chat {
     String? peerAbout,
     String? peerAvatarColor,
     String? peerAvatar,
+    bool? isGroup,
+    int? memberCount,
     DateTime? peerLastSeen,
     Presence? peerPresence,
     String? lastMessageText,
@@ -183,6 +189,8 @@ class Chat {
         peerAbout: peerAbout ?? this.peerAbout,
         peerAvatarColor: peerAvatarColor ?? this.peerAvatarColor,
         peerAvatar: peerAvatar ?? this.peerAvatar,
+        isGroup: isGroup ?? this.isGroup,
+        memberCount: memberCount ?? this.memberCount,
         peerLastSeen: peerLastSeen ?? this.peerLastSeen,
         peerPresence: peerPresence ?? this.peerPresence,
         lastMessageText: lastMessageText ?? this.lastMessageText,
@@ -207,6 +215,22 @@ class Chat {
         updatedAt: DateTime.now(),
       );
 
+  factory Chat.group({
+    required String id,
+    required String title,
+    String avatar = '',
+    int memberCount = 0,
+  }) =>
+      Chat(
+        id: id,
+        peerId: id,
+        peerName: title,
+        peerAvatar: avatar,
+        isGroup: true,
+        memberCount: memberCount,
+        updatedAt: DateTime.now(),
+      );
+
   Map<String, Object?> toRow() => {
         'id': id,
         'peer_id': peerId,
@@ -215,6 +239,8 @@ class Chat {
         'peer_about': peerAbout,
         'peer_avatar_color': peerAvatarColor,
         'peer_avatar': peerAvatar,
+        'is_group': isGroup ? 1 : 0,
+        'member_count': memberCount,
         'peer_last_seen': peerLastSeen?.millisecondsSinceEpoch,
         'peer_presence': presenceToWire(peerPresence),
         'last_message_text': lastMessageText,
@@ -234,6 +260,8 @@ class Chat {
         peerAbout: (row['peer_about'] as String?) ?? '',
         peerAvatarColor: (row['peer_avatar_color'] as String?) ?? '#1A9C7A',
         peerAvatar: (row['peer_avatar'] as String?) ?? '',
+        isGroup: (row['is_group'] as num?)?.toInt() == 1,
+        memberCount: (row['member_count'] as num?)?.toInt() ?? 0,
         peerLastSeen: row['peer_last_seen'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((row['peer_last_seen'] as num).toInt()),
@@ -404,6 +432,64 @@ class Contact {
   const Contact({required this.user, required this.addedAt});
   final User user;
   final DateTime addedAt;
+}
+
+class GroupMember {
+  const GroupMember({
+    required this.id,
+    required this.name,
+    this.username = '',
+    this.avatar = '',
+    this.avatarColor = '#1A9C7A',
+    this.role = 'member',
+  });
+
+  final String id;
+  final String name;
+  final String username;
+  final String avatar;
+  final String avatarColor;
+  final String role;
+
+  factory GroupMember.fromJson(Map<String, dynamic> json) => GroupMember(
+        id: json['id'] as String,
+        name: (json['name'] as String?) ?? '',
+        username: (json['username'] as String?) ?? '',
+        avatar: (json['avatar'] as String?) ?? '',
+        avatarColor: (json['avatarColor'] as String?) ?? '#1A9C7A',
+        role: (json['role'] as String?) ?? 'member',
+      );
+}
+
+class Group {
+  const Group({
+    required this.id,
+    required this.title,
+    this.avatar = '',
+    this.createdBy = '',
+    this.members = const [],
+  });
+
+  final String id;
+  final String title;
+  final String avatar;
+  final String createdBy;
+  final List<GroupMember> members;
+
+  factory Group.fromJson(Map<String, dynamic> json) {
+    final raw = json['group'] as Map<String, dynamic>? ?? json;
+    final members = (json['members'] as List?)
+            ?.map((e) => GroupMember.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        const <GroupMember>[];
+    return Group(
+      id: raw['id'] as String,
+      title: (raw['title'] as String?) ?? '',
+      avatar: (raw['avatar'] as String?) ?? '',
+      createdBy: (raw['createdBy'] as String?) ?? '',
+      members: members,
+    );
+  }
 }
 
 class AuthSession {

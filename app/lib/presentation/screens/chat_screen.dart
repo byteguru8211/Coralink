@@ -160,14 +160,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ],
                       Flexible(
                         child: Text(
-                          state.peerTyping
-                              ? strings.get('typing')
-                              : switch (state.presence) {
-                                  Presence.online => strings.get('online'),
-                                  Presence.active => strings.get('active'),
-                                  Presence.away => strings.get('away'),
-                                  Presence.offline => lastSeenLabel(state.lastSeen, strings),
-                                },
+                          (chat?.isGroup ?? false)
+                              ? strings
+                                  .get('membersCount')
+                                  .replaceAll('{count}', '${chat!.memberCount}')
+                              : state.peerTyping
+                                  ? strings.get('typing')
+                                  : switch (state.presence) {
+                                      Presence.online => strings.get('online'),
+                                      Presence.active => strings.get('active'),
+                                      Presence.away => strings.get('away'),
+                                      Presence.offline =>
+                                        lastSeenLabel(state.lastSeen, strings),
+                                    },
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(color: palette.textMuted, fontSize: 11.5),
@@ -689,6 +694,190 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  Future<void> _showGroupMembers(Chat chat, AppStrings strings) async {
+    final palette = context.palette;
+    final client = ref.read(clientProvider);
+    Group group;
+    try {
+      group = await client.api.groupDetail(chat.id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final myId = ref.read(sessionProvider).user?.id;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Text(
+                  '${strings.get('groupMembers')} · ${group.members.length}',
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              for (final member in group.members)
+                ListTile(
+                  leading: SeedAvatar(
+                    seedId: member.id,
+                    name: member.name,
+                    colorHex: member.avatarColor,
+                    avatar: member.avatar,
+                    size: 44,
+                  ),
+                  title: Text(
+                    member.id == myId
+                        ? '${member.name} (${strings.get('you')})'
+                        : member.name,
+                    style: TextStyle(color: palette.textPrimary),
+                  ),
+                  subtitle: Text(
+                    member.username.isNotEmpty
+                        ? '@${member.username}'
+                        : member.role,
+                    style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                  ),
+                  trailing: member.role == 'owner'
+                      ? Icon(Icons.star_rounded, color: palette.accent, size: 20)
+                      : null,
+                ),
+              SettingsTile(
+                icon: Icons.person_add_alt_1_rounded,
+                title: strings.get('inviteToGroup'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _inviteToGroup(chat.id, strings);
+                },
+              ),
+              SettingsTile(
+                icon: Icons.logout_rounded,
+                title: strings.get('leaveGroup'),
+                danger: true,
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      backgroundColor: palette.surface,
+                      title: Text(strings.get('leaveGroup')),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: Text(strings.get('cancel')),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: Text(
+                            strings.get('leaveGroup'),
+                            style: TextStyle(color: palette.coral),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed != true) return;
+                  await client.messages.leaveGroup(chat.id);
+                  await ref.read(chatsProvider.notifier).refresh();
+                  if (!mounted) return;
+                  Navigator.of(context).pop();
+                },
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _inviteToGroup(String groupId, AppStrings strings) async {
+    final palette = context.palette;
+    final client = ref.read(clientProvider);
+    final controller = TextEditingController();
+    var results = <User>[];
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: palette.surface,
+          title: Text(strings.get('inviteToGroup')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: strings.get('nicknamePlaceholder'),
+                  prefixIcon: Icon(Icons.search_rounded, color: palette.accent),
+                ),
+                onChanged: (value) async {
+                  final query = value.trim();
+                  if (query.length < 2) {
+                    setDialogState(() => results = const []);
+                    return;
+                  }
+                  try {
+                    final found = await client.api.searchUsers(
+                      query.startsWith('@') ? query.substring(1) : query,
+                    );
+                    setDialogState(() => results = found);
+                  } catch (_) {
+                    setDialogState(() => results = const []);
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 240),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final user in results)
+                      ListTile(
+                        title: Text(user.name,
+                            style: TextStyle(color: palette.textPrimary)),
+                        subtitle: user.username.isNotEmpty
+                            ? Text('@${user.username}',
+                                style: TextStyle(color: palette.textMuted))
+                            : null,
+                        onTap: () async {
+                          Navigator.pop(dialogContext);
+                          await client.messages.inviteToGroup(groupId, user.id);
+                          await ref.read(chatsProvider.notifier).refresh();
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(strings.get('cancel')),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
   Future<void> _showChatMenu(Chat? chat, AppStrings strings) async {
     final palette = context.palette;
     await showModalBottomSheet<void>(
@@ -729,6 +918,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   }
                 },
               ),
+              if (chat.isGroup)
+                SettingsTile(
+                  icon: Icons.groups_rounded,
+                  title: strings.get('groupMembers'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showGroupMembers(chat, strings);
+                  },
+                ),
             ],
             SettingsTile(
               icon: Icons.cleaning_services_outlined,

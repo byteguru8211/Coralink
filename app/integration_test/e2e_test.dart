@@ -7,6 +7,7 @@ import 'package:coralink/data/local_store_memory.dart';
 import 'package:coralink/data/secure_store.dart';
 import 'package:coralink/network/p2p.dart';
 import 'package:coralink/network/realtime.dart';
+import 'package:coralink/security/group_crypto.dart';
 import 'package:coralink/security/signal_service.dart';
 import 'package:coralink/services/message_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,6 +38,7 @@ class TestClient {
   TestClient({
     required this.api,
     required this.signal,
+    required this.groupCrypto,
     required this.realtime,
     required this.p2p,
     required this.messages,
@@ -47,6 +49,7 @@ class TestClient {
 
   final ApiClient api;
   final SignalService signal;
+  final GroupCrypto groupCrypto;
   final RealtimeService realtime;
   final P2PManager p2p;
   final MessageService messages;
@@ -95,10 +98,12 @@ Future<TestClient> _connect(String username) async {
   );
   final realtime = RealtimeService(config.wsUrl, auth.token);
   final p2p = P2PManager(config, realtime);
+  final groupCrypto = GroupCrypto(secure);
   final messages = MessageService(
     store: store,
     api: api,
     signal: signal,
+    groupCrypto: groupCrypto,
     realtime: realtime,
     p2p: p2p,
     myId: auth.user.id,
@@ -108,6 +113,7 @@ Future<TestClient> _connect(String username) async {
   return TestClient(
     api: api,
     signal: signal,
+    groupCrypto: groupCrypto,
     realtime: realtime,
     p2p: p2p,
     messages: messages,
@@ -184,6 +190,7 @@ Future<void> main() async {
         store: bob.store,
         api: bob.api,
         signal: bob.signal,
+        groupCrypto: bob.groupCrypto,
         realtime: realtime2,
         p2p: p2p2,
         myId: bob.userId,
@@ -201,6 +208,43 @@ Future<void> main() async {
 
       final stored = await bob.store.getMessages(alice.userId);
       expect(stored.any((m) => m.text == 'Секретное офлайн-сообщение'), isTrue);
+    },
+  );
+
+  test(
+    'two clients exchange a group message end-to-end',
+    timeout: const Timeout(Duration(seconds: 60)),
+    () async {
+      final suffix = DateTime.now().millisecondsSinceEpoch % 1000000000;
+      final alice = await _connect('ga$suffix');
+      final bob = await _connect('gb$suffix');
+      addTearDown(() async {
+        await alice.dispose();
+        await bob.dispose();
+      });
+
+      final group = await alice.messages.createGroup(
+        title: 'Coral Crew',
+        memberIds: [bob.userId],
+      );
+
+      // Bob receives the group key over the 1-на-1 channel and registers the
+      // chat as a group.
+      var joined = false;
+      for (var i = 0; i < 50 && !joined; i++) {
+        final chat = await bob.store.getChat(group.id);
+        if (chat != null && chat.isGroup) joined = true;
+        if (!joined) await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      expect(joined, isTrue, reason: 'bob should receive the group key and join');
+
+      final incoming = bob.messages.incoming
+          .firstWhere((e) => e.message.text == 'Привет, группа!')
+          .timeout(const Duration(seconds: 15));
+      await alice.messages.sendText(group.id, 'Привет, группа!');
+      final event = await incoming;
+      expect(event.message.senderId, alice.userId);
+      expect(event.message.chatId, group.id);
     },
   );
 }

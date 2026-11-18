@@ -65,6 +65,7 @@ class IncomingMessageDto {
     required this.kind,
     required this.meta,
     required this.createdAt,
+    this.groupId,
   });
 
   final String id;
@@ -73,6 +74,7 @@ class IncomingMessageDto {
   final String kind;
   final Map<String, dynamic> meta;
   final DateTime createdAt;
+  final String? groupId;
 
   factory IncomingMessageDto.fromJson(Map<String, dynamic> json) => IncomingMessageDto(
         id: json['id'] as String,
@@ -83,6 +85,7 @@ class IncomingMessageDto {
         createdAt: DateTime.fromMillisecondsSinceEpoch(
           ((json['createdAt'] as num?) ?? 0).toInt(),
         ),
+        groupId: json['groupId'] as String?,
       );
 }
 
@@ -237,6 +240,55 @@ class ApiClient {
 
   Future<void> removeContact(String userId) =>
       _send('DELETE', '/contacts/$userId');
+
+  Future<Group> createGroup({
+    required String title,
+    List<String> memberIds = const [],
+    String avatar = '',
+  }) async {
+    final json = await _send('POST', '/groups', body: {
+      'title': title,
+      'members': memberIds,
+      'avatar': avatar,
+    });
+    return Group.fromJson(json);
+  }
+
+  Future<List<Group>> myGroups() async {
+    final json = await _send('GET', '/groups');
+    return (json['groups'] as List)
+        .map((e) => Group.fromJson({'group': e}))
+        .toList();
+  }
+
+  Future<Group> groupDetail(String groupId) async {
+    final json = await _send('GET', '/groups/$groupId');
+    return Group.fromJson(json);
+  }
+
+  Future<List<GroupMember>> addGroupMember(String groupId, String userId) async {
+    final json = await _send('POST', '/groups/$groupId/members', body: {
+      'userId': userId,
+    });
+    return (json['members'] as List)
+        .map((e) => GroupMember.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> leaveGroup(String groupId, String userId) =>
+      _send('DELETE', '/groups/$groupId/members/$userId');
+
+  Future<List<IncomingMessageDto>> pendingGroupMessages() async {
+    final json = await _send('GET', '/groups/queued');
+    return (json['messages'] as List)
+        .map((e) => IncomingMessageDto.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> ackGroupMessages(List<String> ids) async {
+    if (ids.isEmpty) return;
+    await _send('POST', '/groups/ack', body: {'ids': ids});
+  }
 
   Future<void> uploadKeys({
     required String identityKey,

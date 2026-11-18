@@ -13,7 +13,7 @@ class SqliteLocalStore implements LocalStore {
 
   final Database _db;
 
-  static const schemaVersion = 2;
+  static const schemaVersion = 3;
 
   static Future<void> createSchema(Database db, int version) async {
     await db.execute('''
@@ -37,6 +37,8 @@ class SqliteLocalStore implements LocalStore {
         peer_about TEXT NOT NULL DEFAULT '',
         peer_avatar_color TEXT NOT NULL DEFAULT '#1A9C7A',
         peer_avatar TEXT NOT NULL DEFAULT '',
+        is_group INTEGER NOT NULL DEFAULT 0,
+        member_count INTEGER NOT NULL DEFAULT 0,
         peer_last_seen INTEGER,
         peer_presence TEXT NOT NULL DEFAULT 'offline',
         last_message_text TEXT NOT NULL DEFAULT '',
@@ -108,6 +110,14 @@ class SqliteLocalStore implements LocalStore {
       );
       await db.execute(
         "ALTER TABLE contacts ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (oldVersion < 3) {
+      await db.execute(
+        'ALTER TABLE chats ADD COLUMN is_group INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE chats ADD COLUMN member_count INTEGER NOT NULL DEFAULT 0',
       );
     }
   }

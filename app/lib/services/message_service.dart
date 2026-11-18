@@ -8,6 +8,7 @@ import '../data/local_store.dart';
 import '../domain/models.dart';
 import '../network/p2p.dart';
 import '../network/realtime.dart';
+import '../security/group_crypto.dart';
 import '../security/signal_service.dart';
 
 class IncomingEvent {
@@ -34,6 +35,7 @@ class MessageService {
     required this.store,
     required this.api,
     required this.signal,
+    required this.groupCrypto,
     required this.realtime,
     required this.p2p,
     required this.myId,
@@ -58,6 +60,7 @@ class MessageService {
   final LocalStore store;
   final ApiClient api;
   final SignalService signal;
+  final GroupCrypto groupCrypto;
   final RealtimeService realtime;
   final P2PManager p2p;
   final String myId;
@@ -100,9 +103,163 @@ class MessageService {
           viaRelay: true,
         );
       }
+      final groupQueued = await api.pendingGroupMessages();
+      final ackIds = <String>[];
+      for (final dto in groupQueued) {
+        final groupId = dto.groupId;
+        if (groupId == null) continue;
+        final stored = await _processGroupIncoming(
+          id: dto.id,
+          groupId: groupId,
+          senderId: dto.senderId,
+          payload: dto.ciphertext,
+          kind: dto.kind,
+          createdAt: dto.createdAt,
+        );
+        if (stored) ackIds.add(dto.id);
+      }
+      if (ackIds.isNotEmpty) await api.ackGroupMessages(ackIds);
       await flushOutbox();
     } catch (error) {
       Log.e('message.sync', error);
+    }
+  }
+
+  /// Decrypts and stores a group message. Returns true when it was decrypted
+  /// (so the caller can acknowledge it); undecryptable messages are stored with
+  /// a placeholder and left un-acked for a later retry.
+  Future<bool> _processGroupIncoming({
+    required String id,
+    required String groupId,
+    required String senderId,
+    required String payload,
+    required String kind,
+    required DateTime createdAt,
+  }) async {
+    if (await store.getMessage(id) != null) return true;
+    Map<String, dynamic>? envelope;
+    String? error;
+    try {
+      envelope = await groupCrypto.decrypt(groupId, payload);
+    } on GroupCryptoException catch (e) {
+      error = e.code;
+    }
+    if (envelope == null) {
+      final broken = Message(
+        id: id,
+        chatId: groupId,
+        senderId: senderId,
+        text: error == 'no_key'
+            ? 'Нет ключа группы'
+            : 'Не удалось расшифровать сообщение',
+        status: MessageStatus.delivered,
+        createdAt: createdAt,
+        meta: const {'undecryptable': true},
+      );
+      await store.upsertMessage(broken);
+      await store.touchChat(groupId,
+          preview: broken.text, at: createdAt, incrementUnread: activeChatId != groupId);
+      _messageUpdates.add(broken);
+      _incoming.add(IncomingEvent(broken, isActiveChat: activeChatId == groupId));
+      return false;
+    }
+    final type = envelope['type'] as String? ?? 'text';
+    final image = envelope['image'] as String?;
+    final fileData = envelope['data'] as String?;
+    final meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final text = (envelope['text'] as String?) ?? '';
+    final isActive = activeChatId == groupId;
+    final MessageKind messageKind = type == 'image'
+        ? MessageKind.image
+        : type == 'file'
+            ? MessageKind.file
+            : MessageKind.text;
+    final message = Message(
+      id: id,
+      chatId: groupId,
+      senderId: senderId,
+      text: text,
+      kind: messageKind,
+      status: isActive ? MessageStatus.read : MessageStatus.delivered,
+      createdAt: createdAt,
+      meta: messageKind == MessageKind.file ? {...meta, if (fileData != null) 'data': fileData} : meta,
+      imageBase64: image,
+    );
+    await store.upsertMessage(message);
+    final preview = messageKind == MessageKind.image
+        ? 'Фото'
+        : messageKind == MessageKind.file
+            ? 'Файл'
+            : text;
+    await store.touchChat(groupId, preview: preview, at: createdAt, incrementUnread: !isActive);
+    if (isActive) {
+      await store.markChatRead(groupId);
+      realtime.markGroupRead(groupId, [id]);
+    }
+    _messageUpdates.add(message);
+    _incoming.add(IncomingEvent(message, isActiveChat: isActive));
+    return true;
+  }
+
+  /// Create a group on the server, store it locally, and distribute the group
+  /// key to every member over their existing 1-на-1 Signal session.
+  Future<Group> createGroup({
+    required String title,
+    List<String> memberIds = const [],
+    String avatar = '',
+  }) async {
+    final group = await api.createGroup(title: title, memberIds: memberIds, avatar: avatar);
+    await _registerGroupChat(group);
+    await _distributeKey(group.id, group.members.map((m) => m.id).toList());
+    return group;
+  }
+
+  Future<void> inviteToGroup(String groupId, String userId) async {
+    final members = await api.addGroupMember(groupId, userId);
+    final existing = await store.getChat(groupId);
+    if (existing != null) {
+      await store.upsertChat(existing.copyWith(memberCount: members.length));
+    }
+    await _distributeKey(groupId, [userId]);
+  }
+
+  Future<void> leaveGroup(String groupId) async {
+    await api.leaveGroup(groupId, myId);
+    await groupCrypto.removeKey(groupId);
+    await store.deleteChat(groupId);
+  }
+
+  Future<void> _registerGroupChat(Group group) async {
+    final chat = Chat.group(
+      id: group.id,
+      title: group.title,
+      avatar: group.avatar,
+      memberCount: group.members.length,
+    );
+    await store.upsertChat(chat);
+  }
+
+  Future<void> _distributeKey(String groupId, List<String> memberIds) async {
+    final key = await groupCrypto.keyFor(groupId);
+    for (final memberId in memberIds) {
+      if (memberId == myId) continue;
+      try {
+        await _sendEnvelope(
+          chatId: memberId,
+          kind: MessageKind.text,
+          preview: null,
+          control: true,
+          envelope: {
+            'v': 1,
+            'type': 'groupKey',
+            'groupId': groupId,
+            'key': key,
+            'sentAt': DateTime.now().millisecondsSinceEpoch,
+          },
+        );
+      } catch (error) {
+        Log.e('group.distribute', error);
+      }
     }
   }
 
@@ -110,13 +267,15 @@ class MessageService {
     if (!realtime.isConnected) return;
     final pending = await store.getOutbox();
     for (final item in pending) {
-      realtime.sendMessage(
-        id: item.payload['id'] as String,
-        to: item.payload['to'] as String,
-        ciphertext: item.payload['ciphertext'] as String,
-        kind: item.payload['kind'] as String,
-        meta: (item.payload['meta'] as Map?)?.cast<String, dynamic>() ?? const {},
-        createdAt: DateTime.fromMillisecondsSinceEpoch(
+      final isGroup = item.payload['group'] == true;
+      _dispatchSend(
+        isGroup,
+        item.payload['id'] as String,
+        item.payload['to'] as String,
+        item.payload['ciphertext'] as String,
+        item.payload['kind'] as String,
+        (item.payload['meta'] as Map?)?.cast<String, dynamic>() ?? const {},
+        DateTime.fromMillisecondsSinceEpoch(
           (item.payload['createdAt'] as num).toInt(),
         ),
       );
@@ -294,9 +453,12 @@ class MessageService {
   }) async {
     final id = const Uuid().v4();
     final createdAt = DateTime.now();
+    final isGroup = (await store.getChat(chatId))?.isGroup ?? false;
     Message message;
     try {
-      final ciphertext = await signal.encrypt(chatId, envelope);
+      final ciphertext = isGroup
+          ? await groupCrypto.encrypt(chatId, envelope)
+          : await signal.encrypt(chatId, envelope);
       message = Message(
         id: id,
         chatId: chatId,
@@ -321,20 +483,14 @@ class MessageService {
       final payload = {
         'id': id,
         'to': chatId,
+        'group': isGroup,
         'ciphertext': ciphertext,
         'kind': wireKind,
         'meta': meta,
         'createdAt': createdAt.millisecondsSinceEpoch,
       };
       if (realtime.isConnected) {
-        realtime.sendMessage(
-          id: id,
-          to: chatId,
-          ciphertext: ciphertext,
-          kind: wireKind,
-          meta: meta,
-          createdAt: createdAt,
-        );
+        _dispatchSend(isGroup, id, chatId, ciphertext, wireKind, meta, createdAt);
         message = message.copyWith(status: MessageStatus.sent);
         await store.updateMessageStatus(id, MessageStatus.sent);
       } else {
@@ -346,7 +502,7 @@ class MessageService {
         ));
       }
       _messageUpdates.add(message);
-      _tryDirect(chatId, id, ciphertext);
+      if (!isGroup) _tryDirect(chatId, id, ciphertext);
       return message;
     } catch (error, stack) {
       Log.e('message.send', error, stack);
@@ -364,6 +520,36 @@ class MessageService {
       await store.upsertMessage(failed);
       _messageUpdates.add(failed);
       rethrow;
+    }
+  }
+
+  void _dispatchSend(
+    bool isGroup,
+    String id,
+    String chatId,
+    String ciphertext,
+    String wireKind,
+    Map<String, dynamic> meta,
+    DateTime createdAt,
+  ) {
+    if (isGroup) {
+      realtime.sendGroupMessage(
+        id: id,
+        groupId: chatId,
+        ciphertext: ciphertext,
+        kind: wireKind,
+        meta: meta,
+        createdAt: createdAt,
+      );
+    } else {
+      realtime.sendMessage(
+        id: id,
+        to: chatId,
+        ciphertext: ciphertext,
+        kind: wireKind,
+        meta: meta,
+        createdAt: createdAt,
+      );
     }
   }
 
@@ -413,11 +599,36 @@ class MessageService {
         } else {
           realtime.ackMessages([id]);
         }
+      case 'group.message':
+        final raw = (event.data['message'] as Map?)?.cast<String, dynamic>() ?? event.data;
+        final id = raw['id'] as String?;
+        final groupId = raw['groupId'] as String?;
+        if (id == null || groupId == null) return;
+        if (await store.getMessage(id) != null) return;
+        await _processGroupIncoming(
+          id: id,
+          groupId: groupId,
+          senderId: (raw['from'] ?? raw['senderId']) as String,
+          payload: raw['ciphertext'] as String,
+          kind: (raw['kind'] as String?) ?? 'text',
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            ((raw['createdAt'] as num?) ?? 0).toInt(),
+          ),
+        );
+      case 'group.read':
+        final ids = (event.data['messageIds'] as List?)
+                ?.map((e) => e as String)
+                .toList() ??
+            const <String>[];
+        if (ids.isEmpty) return;
+        await store.markMessagesRead(ids, at: DateTime.now());
+        for (final id in ids) {
+          final message = await store.getMessage(id);
+          if (message != null) _messageUpdates.add(message);
+        }
       case 'message.ack':
         final id = event.data['id'] as String?;
         if (id == null) return;
-        // "delivered" here means the recipient's socket is online; the explicit
-        // delivered receipt arrives separately after client-side ack.
         final current = await store.getMessage(id);
         if (current != null && current.status == MessageStatus.sending) {
           await store.updateMessageStatus(id, MessageStatus.sent);
@@ -578,6 +789,25 @@ class MessageService {
         final target = await store.getMessage(targetId);
         await store.softDeleteMessage(targetId);
         if (target != null) _messageUpdates.add(target.copyWith(deleted: true, text: ''));
+      }
+      if (ack && viaRelay) realtime.ackMessages([id]);
+      return;
+    }
+    if (type == 'groupKey') {
+      final groupId = envelope['groupId'] as String?;
+      final key = envelope['key'] as String?;
+      if (groupId != null && key != null) {
+        await groupCrypto.importKey(groupId, key);
+        try {
+          final group = await api.groupDetail(groupId);
+          final existing = await store.getChat(groupId);
+          await store.upsertChat(
+            (existing ?? Chat.group(id: group.id, title: group.title, avatar: group.avatar))
+                .copyWith(memberCount: group.members.length),
+          );
+        } catch (error) {
+          Log.e('group.key', error);
+        }
       }
       if (ack && viaRelay) realtime.ackMessages([id]);
       return;
