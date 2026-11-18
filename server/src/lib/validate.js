@@ -6,6 +6,23 @@ const MAX_NAME_LENGTH = 64;
 const MAX_ABOUT_LENGTH = 280;
 const USERNAME_MIN_LENGTH = 3;
 const USERNAME_MAX_LENGTH = 32;
+const MAX_AVATAR_BYTES = 500 * 1024;
+
+/**
+ * Normalizes a profile photo supplied as a base64 data URL. Returns '' to clear
+ * the avatar, the trimmed data URL when valid, or null when malformed/too large.
+ */
+function normalizeAvatar(input) {
+  if (input === null || input === undefined) return '';
+  if (typeof input !== 'string') return null;
+  const value = input.trim();
+  if (value === '') return '';
+  if (!/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(value)) {
+    return null;
+  }
+  if (value.length > MAX_AVATAR_BYTES) return null;
+  return value;
+}
 
 /**
  * Normalizes a nickname/handle used for open (code-free) registration.
@@ -151,6 +168,7 @@ function isNonEmptyString(value, max = 128) {
 module.exports = {
   MAX_ABOUT_LENGTH,
   MAX_NAME_LENGTH,
+  MAX_AVATAR_BYTES,
   USERNAME_MAX_LENGTH,
   USERNAME_MIN_LENGTH,
   decodeBase64Length,
@@ -164,6 +182,7 @@ module.exports = {
   isUuidLike,
   isValidAvatarColor,
   normalizeAbout,
+  normalizeAvatar,
   normalizeName,
   normalizePhone,
   normalizeUsername,

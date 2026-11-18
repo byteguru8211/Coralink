@@ -24,6 +24,7 @@ class User {
     required this.name,
     this.about = '',
     this.avatarColor = '#1A9C7A',
+    this.avatar = '',
     this.lastSeen,
     this.presence = Presence.offline,
   });
@@ -34,6 +35,7 @@ class User {
   final String name;
   final String about;
   final String avatarColor;
+  final String avatar;
   final DateTime? lastSeen;
   final Presence presence;
 
@@ -46,6 +48,7 @@ class User {
     String? name,
     String? about,
     String? avatarColor,
+    String? avatar,
     DateTime? lastSeen,
     Presence? presence,
   }) =>
@@ -56,6 +59,7 @@ class User {
         name: name ?? this.name,
         about: about ?? this.about,
         avatarColor: avatarColor ?? this.avatarColor,
+        avatar: avatar ?? this.avatar,
         lastSeen: lastSeen ?? this.lastSeen,
         presence: presence ?? this.presence,
       );
@@ -67,6 +71,7 @@ class User {
         name: (json['name'] as String?) ?? 'Coralink',
         about: (json['about'] as String?) ?? '',
         avatarColor: (json['avatarColor'] as String?) ?? '#1A9C7A',
+        avatar: (json['avatar'] as String?) ?? '',
         lastSeen: json['lastSeen'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((json['lastSeen'] as num).toInt()),
@@ -81,6 +86,7 @@ class User {
         'name': name,
         'about': about,
         'avatar_color': avatarColor,
+        'avatar': avatar,
         'last_seen': lastSeen?.millisecondsSinceEpoch,
         'presence': presenceToWire(presence),
       };
@@ -91,6 +97,7 @@ class User {
         name: (row['name'] as String?) ?? 'Coralink',
         about: (row['about'] as String?) ?? '',
         avatarColor: (row['avatar_color'] as String?) ?? '#1A9C7A',
+        avatar: (row['avatar'] as String?) ?? '',
         lastSeen: row['last_seen'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((row['last_seen'] as num).toInt()),
@@ -104,11 +111,13 @@ class User {
       other.name == name &&
       other.about == about &&
       other.avatarColor == avatarColor &&
+      other.avatar == avatar &&
       other.presence == presence &&
       other.lastSeen == lastSeen;
 
   @override
-  int get hashCode => Object.hash(id, name, about, avatarColor, presence, lastSeen);
+  int get hashCode =>
+      Object.hash(id, name, about, avatarColor, avatar, presence, lastSeen);
 }
 
 class Chat {
@@ -119,6 +128,7 @@ class Chat {
     this.peerPhone = '',
     this.peerAbout = '',
     this.peerAvatarColor = '#1A9C7A',
+    this.peerAvatar = '',
     this.peerLastSeen,
     this.peerPresence = Presence.offline,
     this.lastMessageText = '',
@@ -136,6 +146,7 @@ class Chat {
   final String peerPhone;
   final String peerAbout;
   final String peerAvatarColor;
+  final String peerAvatar;
   final DateTime? peerLastSeen;
   final Presence peerPresence;
   final String lastMessageText;
@@ -153,6 +164,7 @@ class Chat {
     String? peerPhone,
     String? peerAbout,
     String? peerAvatarColor,
+    String? peerAvatar,
     DateTime? peerLastSeen,
     Presence? peerPresence,
     String? lastMessageText,
@@ -170,6 +182,7 @@ class Chat {
         peerPhone: peerPhone ?? this.peerPhone,
         peerAbout: peerAbout ?? this.peerAbout,
         peerAvatarColor: peerAvatarColor ?? this.peerAvatarColor,
+        peerAvatar: peerAvatar ?? this.peerAvatar,
         peerLastSeen: peerLastSeen ?? this.peerLastSeen,
         peerPresence: peerPresence ?? this.peerPresence,
         lastMessageText: lastMessageText ?? this.lastMessageText,
@@ -188,6 +201,7 @@ class Chat {
         peerPhone: user.phone,
         peerAbout: user.about,
         peerAvatarColor: user.avatarColor,
+        peerAvatar: user.avatar,
         peerLastSeen: user.lastSeen,
         peerPresence: user.presence,
         updatedAt: DateTime.now(),
@@ -200,6 +214,7 @@ class Chat {
         'peer_phone': peerPhone,
         'peer_about': peerAbout,
         'peer_avatar_color': peerAvatarColor,
+        'peer_avatar': peerAvatar,
         'peer_last_seen': peerLastSeen?.millisecondsSinceEpoch,
         'peer_presence': presenceToWire(peerPresence),
         'last_message_text': lastMessageText,
@@ -218,6 +233,7 @@ class Chat {
         peerPhone: (row['peer_phone'] as String?) ?? '',
         peerAbout: (row['peer_about'] as String?) ?? '',
         peerAvatarColor: (row['peer_avatar_color'] as String?) ?? '#1A9C7A',
+        peerAvatar: (row['peer_avatar'] as String?) ?? '',
         peerLastSeen: row['peer_last_seen'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((row['peer_last_seen'] as num).toInt()),
@@ -236,10 +252,11 @@ class Chat {
       );
 }
 
-enum MessageKind { text, image, reaction, delete }
+enum MessageKind { text, image, file, reaction, delete }
 
 MessageKind messageKindFromWire(String? value) => switch (value) {
       'image' => MessageKind.image,
+      'file' => MessageKind.file,
       'reaction' => MessageKind.reaction,
       'delete' => MessageKind.delete,
       _ => MessageKind.text,
@@ -248,6 +265,7 @@ MessageKind messageKindFromWire(String? value) => switch (value) {
 String messageKindToWire(MessageKind kind) => switch (kind) {
       MessageKind.text => 'text',
       MessageKind.image => 'image',
+      MessageKind.file => 'file',
       MessageKind.reaction => 'reaction',
       MessageKind.delete => 'delete',
     };
@@ -299,6 +317,7 @@ class Message {
 
   bool isMine(String myId) => senderId == myId;
   bool get isImage => kind == MessageKind.image;
+  bool get isFile => kind == MessageKind.file;
   bool get isControl => kind == MessageKind.reaction || kind == MessageKind.delete;
 
   Message copyWith({

@@ -74,7 +74,9 @@ class MessageService {
   late final StreamSubscription<RealtimeStatus> _statusSubscription;
   Timer? _outboxTimer;
   String? activeChatId;
+  final Set<String> _inFlight = {};
   final int _maxRawImageBytes = 340 * 1024;
+  final int _maxRawFileBytes = 8 * 1024 * 1024;
 
   Stream<Message> get messageUpdates => _messageUpdates.stream;
   Stream<IncomingEvent> get incoming => _incoming.stream;
@@ -131,6 +133,7 @@ class MessageService {
           peerPhone: peer.phone,
           peerAbout: peer.about,
           peerAvatarColor: peer.avatarColor,
+          peerAvatar: peer.avatar,
           peerPresence: peer.presence,
           peerLastSeen: peer.lastSeen,
         );
@@ -189,6 +192,33 @@ class MessageService {
         'type': 'image',
         'image': base64Data,
         'meta': {'mime': mime, 'name': name},
+        'text': caption,
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  Future<Message> sendFile(
+    String chatId, {
+    required String base64Data,
+    required String mime,
+    required String name,
+    required int size,
+    String caption = '',
+  }) async {
+    if (size > _maxRawFileBytes) {
+      throw ArgumentError('file_too_large');
+    }
+    return _sendEnvelope(
+      chatId: chatId,
+      kind: MessageKind.file,
+      preview: 'Файл',
+      meta: {'mime': mime, 'name': name, 'size': size, 'data': base64Data},
+      envelope: {
+        'v': 1,
+        'type': 'file',
+        'data': base64Data,
+        'meta': {'mime': mime, 'name': name, 'size': size},
         'text': caption,
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       },
@@ -287,11 +317,12 @@ class MessageService {
           incrementUnread: false,
         );
       }
+      final wireKind = control ? 'control' : messageKindToWire(kind);
       final payload = {
         'id': id,
         'to': chatId,
         'ciphertext': ciphertext,
-        'kind': kind == MessageKind.image ? 'image' : kind == MessageKind.text ? 'text' : 'control',
+        'kind': wireKind,
         'meta': meta,
         'createdAt': createdAt.millisecondsSinceEpoch,
       };
@@ -300,7 +331,7 @@ class MessageService {
           id: id,
           to: chatId,
           ciphertext: ciphertext,
-          kind: payload['kind'] as String,
+          kind: wireKind,
           meta: meta,
           createdAt: createdAt,
         );
@@ -442,39 +473,87 @@ class MessageService {
     required DateTime createdAt,
     required bool viaRelay,
   }) async {
-    if (await store.getMessage(id) != null) {
-      if (viaRelay) {
-        realtime.ackMessages([id]);
-        if (activeChatId == senderId) realtime.markRead(senderId, [id]);
-      }
+    // The same message can arrive over P2P and relay at once. Serialize by id so
+    // only one copy is decrypted; the other is treated as already handled.
+    if (_inFlight.contains(id)) {
+      if (viaRelay) realtime.ackMessages([id]);
       return;
     }
-    Map<String, dynamic>? envelope;
+    _inFlight.add(id);
     try {
-      envelope = await signal.decrypt(senderId, payload);
-    } on EncryptionException catch (error) {
-      Log.d('message.decrypt', error.code);
-    }
-    final chat = await ensureChat(senderId);
-    final isActive = activeChatId == senderId;
-    if (envelope == null) {
+      if (await store.getMessage(id) != null) {
+        if (viaRelay) {
+          realtime.ackMessages([id]);
+          if (activeChatId == senderId) realtime.markRead(senderId, [id]);
+        }
+        return;
+      }
+      Map<String, dynamic>? envelope;
+      String? decryptError;
+      try {
+        envelope = await signal.decrypt(senderId, payload);
+      } on EncryptionException catch (error) {
+        decryptError = error.code;
+        Log.d('message.decrypt', error.code);
+      }
+      if (envelope != null) {
+        await _applyDecrypted(
+          envelope: envelope,
+          id: id,
+          senderId: senderId,
+          createdAt: createdAt,
+          viaRelay: viaRelay,
+        );
+        await _retryPending(senderId);
+        return;
+      }
+      // The other transport already decrypted this exact message.
+      if (decryptError == 'duplicate') {
+        if (viaRelay) realtime.ackMessages([id]);
+        return;
+      }
+      // Out-of-order: a regular message can land before the pre-key message that
+      // opens the session. Keep the ciphertext and retry once it advances.
+      final retryable = decryptError == 'no_session' ||
+          decryptError == 'missing_prekey' ||
+          decryptError == 'decrypt_failed';
+      final isActive = activeChatId == senderId;
       final broken = Message(
         id: id,
         chatId: senderId,
         senderId: senderId,
-        text: 'Не удалось расшифровать сообщение',
+        text: decryptError == 'identity_changed'
+            ? 'Ключи собеседника изменились'
+            : 'Не удалось расшифровать сообщение',
         status: MessageStatus.delivered,
         createdAt: createdAt,
-        meta: const {'undecryptable': true},
+        meta: {
+          'undecryptable': true,
+          'code': decryptError,
+          if (retryable) 'enc': payload,
+        },
       );
       await store.upsertMessage(broken);
-      await store.touchChat(senderId, preview: broken.text, at: createdAt, incrementUnread: !isActive);
+      await store.touchChat(senderId,
+          preview: broken.text, at: createdAt, incrementUnread: !isActive);
       if (viaRelay) realtime.ackMessages([id]);
       _messageUpdates.add(broken);
       _incoming.add(IncomingEvent(broken, isActiveChat: isActive));
-      return;
+    } finally {
+      _inFlight.remove(id);
     }
+  }
 
+  /// Turns a successfully decrypted envelope into a stored message (or applies a
+  /// control action). Shared by the live path and the out-of-order retry path.
+  Future<void> _applyDecrypted({
+    required Map<String, dynamic> envelope,
+    required String id,
+    required String senderId,
+    required DateTime createdAt,
+    required bool viaRelay,
+    bool ack = true,
+  }) async {
     final type = envelope['type'] as String? ?? 'text';
     if (type == 'reaction') {
       final targetId = envelope['targetId'] as String?;
@@ -490,7 +569,7 @@ class MessageService {
           _messageUpdates.add(target.copyWith(reactions: reactions));
         }
       }
-      if (viaRelay) realtime.ackMessages([id]);
+      if (ack && viaRelay) realtime.ackMessages([id]);
       return;
     }
     if (type == 'delete') {
@@ -500,39 +579,76 @@ class MessageService {
         await store.softDeleteMessage(targetId);
         if (target != null) _messageUpdates.add(target.copyWith(deleted: true, text: ''));
       }
-      if (viaRelay) realtime.ackMessages([id]);
+      if (ack && viaRelay) realtime.ackMessages([id]);
       return;
     }
 
+    await ensureChat(senderId);
+    final isActive = activeChatId == senderId;
     final image = envelope['image'] as String?;
+    final fileData = envelope['data'] as String?;
     final meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
     final text = (envelope['text'] as String?) ?? '';
+    final MessageKind kind = type == 'image'
+        ? MessageKind.image
+        : type == 'file'
+            ? MessageKind.file
+            : MessageKind.text;
     final message = Message(
       id: id,
       chatId: senderId,
       senderId: senderId,
       text: text,
-      kind: type == 'image' ? MessageKind.image : MessageKind.text,
+      kind: kind,
       status: isActive ? MessageStatus.read : MessageStatus.delivered,
       createdAt: createdAt,
-      meta: meta,
+      meta: kind == MessageKind.file ? {...meta, if (fileData != null) 'data': fileData} : meta,
       imageBase64: image,
     );
     await store.upsertMessage(message);
-    final preview = type == 'image' ? 'Фото' : text;
+    final preview = kind == MessageKind.image
+        ? 'Фото'
+        : kind == MessageKind.file
+            ? 'Файл'
+            : text;
     await store.touchChat(senderId, preview: preview, at: createdAt, incrementUnread: !isActive);
-    if (isActive) {
-      await store.markChatRead(senderId);
-    }
-    if (viaRelay) {
+    if (isActive) await store.markChatRead(senderId);
+    if (ack && viaRelay) {
       realtime.ackMessages([id]);
       if (isActive) realtime.markRead(senderId, [id]);
     }
     _messageUpdates.add(message);
     _incoming.add(IncomingEvent(message, isActiveChat: isActive));
-    if (chat.peerName == 'Coralink' && chat.peerPhone.isEmpty) {
-      // Profile may have arrived since the placeholder chat was created.
-      unawaited(ensureChat(senderId));
+  }
+
+  /// Re-decrypts messages that arrived before their session existed, in
+  /// chronological order, stopping at the first one still undecryptable so the
+  /// ratchet is advanced strictly in sequence.
+  Future<void> _retryPending(String senderId) async {
+    final all = await store.getMessages(senderId, includeArchived: true, limit: 500);
+    final pending = all
+        .where((m) =>
+            m.meta['undecryptable'] == true &&
+            m.meta['enc'] is String &&
+            (m.meta['code'] == 'no_session' ||
+                m.meta['code'] == 'missing_prekey' ||
+                m.meta['code'] == 'decrypt_failed'))
+        .toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    for (final m in pending) {
+      try {
+        final envelope = await signal.decrypt(senderId, m.meta['enc'] as String);
+        await _applyDecrypted(
+          envelope: envelope,
+          id: m.id,
+          senderId: senderId,
+          createdAt: m.createdAt,
+          viaRelay: false,
+          ack: false,
+        );
+      } on EncryptionException {
+        break;
+      }
     }
   }
 
@@ -561,23 +677,49 @@ class MessageService {
 
   Future<void> retry(Message message) async {
     if (message.status != MessageStatus.failed) return;
-    final envelope = message.kind == MessageKind.image
-        ? {
-            'v': 1,
-            'type': 'image',
-            'image': message.imageBase64,
-            'meta': message.meta,
-            'text': '',
-            'sentAt': DateTime.now().millisecondsSinceEpoch,
-          }
-        : {'v': 1, 'type': 'text', 'text': message.text, 'sentAt': DateTime.now().millisecondsSinceEpoch};
+    final Map<String, dynamic> envelope;
+    final String wireKind;
+    if (message.kind == MessageKind.image) {
+      envelope = {
+        'v': 1,
+        'type': 'image',
+        'image': message.imageBase64,
+        'meta': message.meta,
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      wireKind = 'image';
+    } else if (message.kind == MessageKind.file) {
+      final data = message.meta['data'];
+      envelope = {
+        'v': 1,
+        'type': 'file',
+        'data': data,
+        'meta': {
+          'mime': message.meta['mime'],
+          'name': message.meta['name'],
+          'size': message.meta['size'],
+        },
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      wireKind = 'file';
+    } else {
+      envelope = {
+        'v': 1,
+        'type': 'text',
+        'text': message.text,
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      wireKind = 'text';
+    }
     final ciphertext = await signal.encrypt(message.chatId, envelope);
     await store.upsertMessage(message.copyWith(status: MessageStatus.sending));
     realtime.sendMessage(
       id: message.id,
       to: message.chatId,
       ciphertext: ciphertext,
-      kind: message.kind == MessageKind.image ? 'image' : 'text',
+      kind: wireKind,
       meta: message.meta,
       createdAt: message.createdAt,
     );

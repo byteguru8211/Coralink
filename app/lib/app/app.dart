@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/app_colors.dart';
 import '../core/strings.dart';
 import '../core/theme.dart';
+import '../data/settings_store.dart';
 import '../domain/models.dart';
 import 'dependencies.dart';
 import 'session.dart';
@@ -41,6 +42,14 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
         MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)),
       );
     };
+    // Initialize and, on Android/iOS, ask for the notification permission up
+    // front so incoming messages can surface even before the user opens
+    // Settings.
+    unawaited(notifications.init().then((_) {
+      if (ref.read(settingsProvider).notificationMode != NotificationMode.offline) {
+        unawaited(notifications.requestPermission());
+      }
+    }));
     _resetIdle();
   }
 

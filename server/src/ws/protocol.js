@@ -7,7 +7,9 @@ const {
   isUuidLike,
 } = require('../lib/validate');
 
-const MAX_MESSAGE_BYTES = 512 * 1024;
+// Decoded ciphertext ceiling: ~9 MB allows an ~8 MB file attachment to travel
+// through the relay. Image messages stay far below this.
+const MAX_MESSAGE_BYTES = 9 * 1024 * 1024;
 const MAX_BATCH = 500;
 const MAX_META_BYTES = 16 * 1024;
 const MAX_SDP_BYTES = 256 * 1024;

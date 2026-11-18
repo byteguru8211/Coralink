@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 
@@ -16,9 +17,12 @@ import '../../core/utils.dart';
 import '../../domain/models.dart';
 import '../../network/realtime.dart';
 import '../../security/signal_service.dart';
+import '../../services/audio_service.dart';
 import '../controllers.dart';
 import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
+
+enum _Attach { gallery, camera, file }
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.chatId, this.initialTitle});
@@ -37,10 +41,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _rustling = false;
   bool _sendPulse = false;
   int _lastCount = 0;
+  AudioService? _audio;
 
   @override
   void initState() {
     super.initState();
+    _audio = ref.read(audioProvider);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom(animate: false);
       _syncRustle(ref.read(messagesProvider(widget.chatId)));
@@ -52,7 +58,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _text.dispose();
     _focus.dispose();
     _scroll.dispose();
-    if (_rustling) ref.read(audioProvider).stopRustle();
+    // Stop the ambient rustle when leaving the chat. `ref` is unusable in
+    // dispose, so the service was captured in initState.
+    _rustling = false;
+    _audio?.stopRustle();
     super.dispose();
   }
 
@@ -71,10 +80,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final shouldPlay = settings.rustleSound && state.presence != Presence.offline;
     if (shouldPlay && !_rustling) {
       _rustling = true;
-      ref.read(audioProvider).startRustle();
+      _audio?.startRustle();
     } else if (!shouldPlay && _rustling) {
       _rustling = false;
-      ref.read(audioProvider).stopRustle();
+      _audio?.stopRustle();
     }
   }
 
@@ -122,6 +131,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               seedId: widget.chatId,
               name: name,
               colorHex: chat?.peerAvatarColor,
+              avatar: chat?.peerAvatar,
               online: state.presence != Presence.offline,
               size: 36,
             ),
@@ -317,6 +327,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           myId: ref.read(sessionProvider).user?.id ?? '',
           strings: strings,
           onLongPress: () => _showMessageActions(message, strings),
+          onOpenFile: message.isFile ? () => _saveFile(message, strings) : null,
           onRetry: message.status == MessageStatus.failed
               ? () => ref.read(messagesProvider(widget.chatId).notifier).retry(message)
               : null,
@@ -345,7 +356,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             IconButton(
-              onPressed: () => _pickImage(strings),
+              onPressed: () => _showAttachments(strings),
               icon: Icon(Icons.add_circle_outline_rounded, color: palette.accentSoft),
             ),
             Expanded(
@@ -433,8 +444,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  Future<void> _pickImage(AppStrings strings) async {
-    final source = await showModalBottomSheet<ImageSource>(
+  Future<void> _showAttachments(AppStrings strings) async {
+    final mobile = defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    final choice = await showModalBottomSheet<_Attach>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
@@ -444,21 +457,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             SettingsTile(
               icon: Icons.photo_library_outlined,
               title: strings.get('gallery'),
-              onTap: () => Navigator.pop(context, ImageSource.gallery),
+              onTap: () => Navigator.pop(context, _Attach.gallery),
             ),
-            if (defaultTargetPlatform == TargetPlatform.android ||
-                defaultTargetPlatform == TargetPlatform.iOS)
+            if (mobile)
               SettingsTile(
                 icon: Icons.photo_camera_outlined,
                 title: strings.get('camera'),
-                onTap: () => Navigator.pop(context, ImageSource.camera),
+                onTap: () => Navigator.pop(context, _Attach.camera),
               ),
+            SettingsTile(
+              icon: Icons.attach_file_rounded,
+              title: strings.get('file'),
+              onTap: () => Navigator.pop(context, _Attach.file),
+            ),
             const SizedBox(height: 8),
           ],
         ),
       ),
     );
-    if (source == null) return;
+    switch (choice) {
+      case _Attach.gallery:
+        await _pickImage(ImageSource.gallery, strings);
+      case _Attach.camera:
+        await _pickImage(ImageSource.camera, strings);
+      case _Attach.file:
+        await _pickFile(strings);
+      case null:
+        break;
+    }
+  }
+
+  Future<void> _pickImage(ImageSource source, AppStrings strings) async {
     try {
       final file = await ImagePicker().pickImage(
         source: source,
@@ -489,10 +518,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  Future<void> _pickFile(AppStrings strings) async {
+    try {
+      final files = await FilePicker.pickFiles(type: FileType.any);
+      if (files.isEmpty) return;
+      final picked = files.single;
+      final bytes = await picked.readAsBytes();
+      if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.get('fileTooLarge'))),
+        );
+        return;
+      }
+      final mime = picked.extension != null
+          ? (lookupMimeType('x.${picked.extension}') ?? 'application/octet-stream')
+          : 'application/octet-stream';
+      await ref.read(messagesProvider(widget.chatId).notifier).sendFile(
+            base64Encode(bytes),
+            mime,
+            picked.name,
+            bytes.lengthInBytes,
+          );
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
+  }
+
   String _errorText(Object error, AppStrings strings) {
     if (error is ArgumentError) {
       final message = '${error.message}';
       if (message.contains('image_too_large')) return strings.get('imageTooLarge');
+      if (message.contains('file_too_large')) return strings.get('fileTooLarge');
       if (message.contains('long')) return strings.get('imageTooLarge');
     }
     if (error is EncryptionException) {
@@ -503,6 +564,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       };
     }
     return strings.get('networkError');
+  }
+
+  Future<void> _saveFile(Message message, AppStrings strings) async {
+    final data = message.meta['data'];
+    if (data is! String) return;
+    final bytes = base64Decode(data);
+    final name = (message.meta['name'] as String?) ?? 'file';
+    try {
+      final saved = await FilePicker.saveFile(fileName: name, bytes: bytes);
+      if (!mounted) return;
+      final where = saved != null && saved.scheme == 'file'
+          ? ' ${saved.toFilePath()}'
+          : '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${strings.get('savedTo')}$where')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
   }
 
   Future<void> _showMessageActions(Message message, AppStrings strings) async {

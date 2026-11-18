@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -287,6 +289,12 @@ class _PulseHaloState extends State<PulseHalo> with SingleTickerProviderStateMix
   }
 }
 
+Uint8List _decodeAvatar(String value) {
+  final comma = value.indexOf(',');
+  final raw = value.startsWith('data:') && comma >= 0 ? value.substring(comma + 1) : value;
+  return base64Decode(raw);
+}
+
 class SeedAvatar extends StatelessWidget {
   const SeedAvatar({
     super.key,
@@ -294,6 +302,7 @@ class SeedAvatar extends StatelessWidget {
     required this.name,
     this.size = 52,
     this.colorHex,
+    this.avatar,
     this.online = false,
     this.pulse = false,
   });
@@ -302,6 +311,7 @@ class SeedAvatar extends StatelessWidget {
   final String name;
   final double size;
   final String? colorHex;
+  final String? avatar;
   final bool online;
   final bool pulse;
 
@@ -310,7 +320,7 @@ class SeedAvatar extends StatelessWidget {
     final colors = colorHex != null
         ? [colorFromHex(colorHex!), colorFromHex(colorHex!).withValues(alpha: 0.55)]
         : seedGradient(seedId);
-    final avatar = Container(
+    final base = Container(
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -339,10 +349,23 @@ class SeedAvatar extends StatelessWidget {
         ),
       ),
     );
+    final photo = avatar;
+    final face = (photo != null && photo.isNotEmpty)
+        ? ClipOval(
+            child: Image.memory(
+              _decodeAvatar(photo),
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => base,
+            ),
+          )
+        : base;
     final withBadge = Stack(
       clipBehavior: Clip.none,
       children: [
-        avatar,
+        face,
         if (online)
           Positioned(
             right: 1,

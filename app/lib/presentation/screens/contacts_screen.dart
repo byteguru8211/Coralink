@@ -110,6 +110,7 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
                             seedId: user.id,
                             name: user.name,
                             colorHex: user.avatarColor,
+                            avatar: user.avatar,
                             online: online,
                             size: 48,
                           ),

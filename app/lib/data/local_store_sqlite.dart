@@ -13,7 +13,7 @@ class SqliteLocalStore implements LocalStore {
 
   final Database _db;
 
-  static const schemaVersion = 1;
+  static const schemaVersion = 2;
 
   static Future<void> createSchema(Database db, int version) async {
     await db.execute('''
@@ -23,6 +23,7 @@ class SqliteLocalStore implements LocalStore {
         name TEXT NOT NULL,
         about TEXT NOT NULL DEFAULT '',
         avatar_color TEXT NOT NULL DEFAULT '#1A9C7A',
+        avatar TEXT NOT NULL DEFAULT '',
         last_seen INTEGER,
         presence TEXT NOT NULL DEFAULT 'offline'
       )
@@ -35,6 +36,7 @@ class SqliteLocalStore implements LocalStore {
         peer_phone TEXT NOT NULL DEFAULT '',
         peer_about TEXT NOT NULL DEFAULT '',
         peer_avatar_color TEXT NOT NULL DEFAULT '#1A9C7A',
+        peer_avatar TEXT NOT NULL DEFAULT '',
         peer_last_seen INTEGER,
         peer_presence TEXT NOT NULL DEFAULT 'offline',
         last_message_text TEXT NOT NULL DEFAULT '',
@@ -77,6 +79,7 @@ class SqliteLocalStore implements LocalStore {
         name TEXT NOT NULL,
         about TEXT NOT NULL DEFAULT '',
         avatar_color TEXT NOT NULL DEFAULT '#1A9C7A',
+        avatar TEXT NOT NULL DEFAULT '',
         last_seen INTEGER,
         presence TEXT NOT NULL DEFAULT 'offline',
         added_at INTEGER NOT NULL
@@ -91,6 +94,22 @@ class SqliteLocalStore implements LocalStore {
         attempts INTEGER NOT NULL DEFAULT 0
       )
     ''');
+  }
+
+  /// Adds the avatar columns introduced in schema v2 for databases created
+  /// before profile photos existed.
+  static Future<void> upgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        "ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE chats ADD COLUMN peer_avatar TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(
+        "ALTER TABLE contacts ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+      );
+    }
   }
 
   @override

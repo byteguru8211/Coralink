@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   about TEXT DEFAULT '',
   avatar_color TEXT DEFAULT '#1A9C7A',
+  avatar TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   last_seen INTEGER NOT NULL,
   identity_key TEXT,
@@ -83,6 +84,7 @@ function mapUser(row) {
     name: row.name,
     about: row.about || '',
     avatarColor: row.avatar_color || '#1A9C7A',
+    avatar: row.avatar || '',
     presenceVisibility: row.presence_visibility || 'contacts',
     createdAt: row.created_at,
     lastSeen: row.last_seen,
@@ -162,6 +164,9 @@ class CoralinkDatabase {
         'CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)',
       );
     }
+    if (!userColumns.some((column) => column.name === 'avatar')) {
+      this.db.exec("ALTER TABLE users ADD COLUMN avatar TEXT DEFAULT ''");
+    }
 
     this.stmts = {
       getUserById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -171,14 +176,15 @@ class CoralinkDatabase {
       ),
       insertUser: this.db.prepare(`
         INSERT INTO users
-          (id, phone, username, name, about, avatar_color, created_at, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (id, phone, username, name, about, avatar_color, avatar, created_at, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       updateUserProfile: this.db.prepare(`
         UPDATE users
         SET name = COALESCE(?, name),
             about = COALESCE(?, about),
             avatar_color = COALESCE(?, avatar_color),
+            avatar = COALESCE(?, avatar),
             presence_visibility = COALESCE(?, presence_visibility)
         WHERE id = ?
       `),
@@ -370,6 +376,7 @@ class CoralinkDatabase {
     name,
     about = '',
     avatarColor = '#1A9C7A',
+    avatar = '',
     createdAt = Date.now(),
     lastSeen = Date.now(),
   }) {
@@ -380,6 +387,7 @@ class CoralinkDatabase {
       name,
       about,
       avatarColor,
+      avatar,
       createdAt,
       lastSeen,
     );
@@ -392,6 +400,7 @@ class CoralinkDatabase {
       name = null,
       about = null,
       avatarColor = null,
+      avatar = null,
       presenceVisibility = null,
     } = {},
   ) {
@@ -399,6 +408,7 @@ class CoralinkDatabase {
       name,
       about,
       avatarColor,
+      avatar,
       presenceVisibility,
       id,
     );

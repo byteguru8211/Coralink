@@ -7,6 +7,7 @@ const {
   isUuidLike,
   isValidAvatarColor,
   normalizeAbout,
+  normalizeAvatar,
   normalizeName,
 } = require('../lib/validate');
 
@@ -17,6 +18,7 @@ function toPublicUser(user, hub) {
     name: user.name,
     about: user.about,
     avatarColor: user.avatarColor,
+    avatar: user.avatar || '',
     lastSeen: user.lastSeen,
     online: hub.isOnline(user.id),
   };
@@ -52,6 +54,7 @@ function registerUserRoutes(router) {
       name: null,
       about: null,
       avatarColor: null,
+      avatar: null,
       presenceVisibility: null,
     };
 
@@ -88,6 +91,18 @@ function registerUserRoutes(router) {
         );
       }
       changes.avatarColor = body.avatarColor;
+    }
+
+    if (body.avatar !== undefined) {
+      const avatar = normalizeAvatar(body.avatar);
+      if (avatar === null) {
+        throw new HttpError(
+          400,
+          'invalid_avatar',
+          'avatar must be a base64 image data URL (png/jpeg/webp) under 500 KB',
+        );
+      }
+      changes.avatar = avatar;
     }
 
     if (body.presenceVisibility !== undefined) {

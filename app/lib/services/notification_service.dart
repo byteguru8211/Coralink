@@ -15,7 +15,11 @@ class NotificationService {
   bool get _supported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS);
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.windows);
+
+  static const _appUserModelId = 'com.coralink.app';
+  static const _windowsGuid = '7c1f2a4b-9d3e-4c58-8a61-2b0f5e7d9c13';
 
   static const _minimalChannel = AndroidNotificationChannel(
     'coralink_minimal',
@@ -57,18 +61,29 @@ class NotificationService {
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
+    const windows = WindowsInitializationSettings(
+      appName: 'Coralink',
+      appUserModelId: _appUserModelId,
+      guid: _windowsGuid,
+    );
     await _plugin.initialize(
-      settings: const InitializationSettings(android: android, iOS: ios),
+      settings: const InitializationSettings(
+        android: android,
+        iOS: ios,
+        windows: windows,
+      ),
       onDidReceiveNotificationResponse: (response) {
         final chatId = response.payload;
         if (chatId != null && chatId.isNotEmpty) onOpenChat?.call(chatId);
       },
     );
-    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    await androidPlugin?.createNotificationChannel(_minimalChannel);
-    await androidPlugin?.createNotificationChannel(_mediumChannel);
-    await androidPlugin?.createNotificationChannel(_advancedChannel);
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      await androidPlugin?.createNotificationChannel(_minimalChannel);
+      await androidPlugin?.createNotificationChannel(_mediumChannel);
+      await androidPlugin?.createNotificationChannel(_advancedChannel);
+    }
     _ready = true;
   }
 
@@ -155,6 +170,7 @@ class NotificationService {
           presentBadge: true,
           presentSound: true,
         ),
+        windows: const WindowsNotificationDetails(),
       ),
     );
   }

@@ -17,6 +17,7 @@ class MessageBubble extends StatefulWidget {
     required this.strings,
     this.onLongPress,
     this.onRetry,
+    this.onOpenFile,
     this.highlight = false,
   });
 
@@ -25,6 +26,7 @@ class MessageBubble extends StatefulWidget {
   final AppStrings strings;
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
+  final VoidCallback? onOpenFile;
   final bool highlight;
 
   @override
@@ -119,6 +121,65 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                 ),
               ),
             if (message.isImage) const SizedBox(height: 6),
+            if (message.isFile)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: widget.onOpenFile,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: (mine ? palette.accent : palette.accentSoft)
+                              .withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(_fileIcon(message.meta['mime'] as String?),
+                            color: mine ? palette.outgoingText : palette.accent, size: 22),
+                      ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              (message.meta['name'] as String?) ??
+                                  widget.strings.get('file'),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: mine ? palette.outgoingText : palette.incomingText,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _formatSize(message.meta['size']),
+                              style: TextStyle(
+                                color: mine
+                                    ? palette.outgoingText.withValues(alpha: 0.75)
+                                    : palette.textMuted,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(Icons.download_rounded,
+                          size: 18,
+                          color: mine ? palette.outgoingText : palette.accent),
+                    ],
+                  ),
+                ),
+              ),
+            if (message.isFile && message.text.isNotEmpty) const SizedBox(height: 6),
             if (message.text.isNotEmpty)
               Text(
                 message.text,
@@ -226,6 +287,31 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
       return Uint8List(0);
     }
   }
+
+  IconData _fileIcon(String? mime) {
+    if (mime == null) return Icons.insert_drive_file_rounded;
+    if (mime.startsWith('image/')) return Icons.image_rounded;
+    if (mime.startsWith('video/')) return Icons.movie_rounded;
+    if (mime.startsWith('audio/')) return Icons.audiotrack_rounded;
+    if (mime.contains('pdf')) return Icons.picture_as_pdf_rounded;
+    if (mime.contains('zip') || mime.contains('compressed') || mime.contains('rar')) {
+      return Icons.folder_zip_rounded;
+    }
+    if (mime.contains('sheet') || mime.contains('excel')) return Icons.table_chart_rounded;
+    if (mime.contains('document') || mime.contains('word')) return Icons.description_rounded;
+    if (mime.contains('text')) return Icons.article_rounded;
+    return Icons.insert_drive_file_rounded;
+  }
+
+  String _formatSize(Object? raw) {
+    final bytes = raw is num ? raw.toInt() : 0;
+    if (bytes <= 0) return '';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
 }
 
 class _StatusDrop extends StatelessWidget {
@@ -317,6 +403,7 @@ class ChatTile extends StatelessWidget {
               seedId: chat.peerId,
               name: chat.peerName,
               colorHex: chat.peerAvatarColor,
+              avatar: chat.peerAvatar,
               online: online,
               pulse: unread,
               size: 54,

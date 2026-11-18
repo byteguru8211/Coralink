@@ -136,6 +136,7 @@ class SessionController extends Notifier<SessionState> {
     required String name,
     required String about,
     required String avatarColor,
+    String? avatar,
   }) async {
     final client = state.client;
     if (client == null) throw StateError('No active client');
@@ -143,6 +144,7 @@ class SessionController extends Notifier<SessionState> {
       name: name,
       about: about,
       avatarColor: avatarColor,
+      avatar: avatar,
     );
     await client.store.upsertUser(user);
     state = SessionState(

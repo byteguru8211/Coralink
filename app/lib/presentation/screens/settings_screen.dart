@@ -48,6 +48,7 @@ class SettingsScreen extends ConsumerWidget {
                         seedId: user.id,
                         name: user.name,
                         colorHex: user.avatarColor,
+                        avatar: user.avatar,
                         online: true,
                         size: 62,
                       ),

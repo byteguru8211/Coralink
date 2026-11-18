@@ -143,6 +143,7 @@ class _EchoScreenState extends ConsumerState<EchoScreen> {
                                     seedId: hit.message.chatId,
                                     name: name,
                                     colorHex: chat?.peerAvatarColor,
+                                    avatar: chat?.peerAvatar,
                                     size: 40,
                                   ),
                                   const SizedBox(width: 12),

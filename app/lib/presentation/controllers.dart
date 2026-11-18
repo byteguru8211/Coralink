@@ -312,6 +312,35 @@ class MessagesController extends Notifier<MessagesState> {
     }
   }
 
+  Future<void> sendFile(
+    String base64Data,
+    String mime,
+    String name,
+    int size,
+  ) async {
+    final client = ref.read(clientProvider);
+    state = state.copyWith(sending: true, error: null);
+    try {
+      await client.messages.sendFile(
+        chatId,
+        base64Data: base64Data,
+        mime: mime,
+        name: name,
+        size: size,
+      );
+      final settings = ref.read(settingsProvider);
+      if (settings.sendSound) {
+        await ref.read(audioProvider).play(NatureSound.drop);
+      }
+      await _load();
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+      rethrow;
+    } finally {
+      if (ref.mounted) state = state.copyWith(sending: false);
+    }
+  }
+
   Future<void> react(String messageId, String emoji) async {
     await ref.read(clientProvider).messages.sendReaction(chatId, messageId, emoji);
   }

@@ -27,6 +27,7 @@ Future<LocalStore> openLocalStore(SecureStore secure) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: SqliteLocalStore.createSchema,
+      onUpgrade: SqliteLocalStore.upgrade,
     );
   } else {
     sqfliteFfiInit();
@@ -35,6 +36,7 @@ Future<LocalStore> openLocalStore(SecureStore secure) async {
       options: OpenDatabaseOptions(
         version: SqliteLocalStore.schemaVersion,
         onCreate: SqliteLocalStore.createSchema,
+        onUpgrade: SqliteLocalStore.upgrade,
       ),
     );
   }

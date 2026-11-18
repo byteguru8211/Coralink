@@ -6,7 +6,9 @@ const { ProtocolError, parseClientEvent } = require('./protocol');
 
 const WS_PATH = '/ws';
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
-const MAX_WS_PAYLOAD = 1024 * 1024;
+// Sized for file attachments: a ~8 MB file is ~11 MB as base64 ciphertext plus
+// JSON envelope overhead. Kept at 16 MB so large messages are not truncated.
+const MAX_WS_PAYLOAD = 16 * 1024 * 1024;
 
 const STATUS_TEXT = {
   400: 'Bad Request',

@@ -1,6 +1,10 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../app/dependencies.dart';
 import '../../app/session.dart';
@@ -22,6 +26,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   late final TextEditingController _name;
   late final TextEditingController _about;
   late String _color;
+  late String _avatar;
   bool _changed = false;
   bool _saving = false;
 
@@ -32,11 +37,76 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     _name = TextEditingController(text: user.name);
     _about = TextEditingController(text: user.about);
     _color = user.avatarColor;
+    _avatar = user.avatar;
     _name.addListener(_markChanged);
     _about.addListener(_markChanged);
   }
 
   void _markChanged() => setState(() => _changed = true);
+
+  Future<void> _pickAvatar() async {
+    final strings = ref.read(stringsProvider);
+    final mobile = defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    final source = mobile
+        ? await showModalBottomSheet<ImageSource>(
+            context: context,
+            showDragHandle: true,
+            builder: (context) => SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SettingsTile(
+                    icon: Icons.photo_library_outlined,
+                    title: strings.get('gallery'),
+                    onTap: () => Navigator.pop(context, ImageSource.gallery),
+                  ),
+                  SettingsTile(
+                    icon: Icons.photo_camera_outlined,
+                    title: strings.get('camera'),
+                    onTap: () => Navigator.pop(context, ImageSource.camera),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          )
+        : ImageSource.gallery;
+    if (source == null) return;
+    try {
+      final file = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 320,
+        maxHeight: 320,
+        imageQuality: 82,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (bytes.lengthInBytes > 360 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.get('imageTooLarge'))),
+        );
+        return;
+      }
+      setState(() {
+        _avatar = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+        _changed = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(strings.get('networkError'))),
+      );
+    }
+  }
+
+  Future<void> _removeAvatar() async {
+    setState(() {
+      _avatar = '';
+      _changed = true;
+    });
+  }
 
   @override
   void dispose() {
@@ -59,6 +129,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             name: _name.text.trim(),
             about: _about.text.trim(),
             avatarColor: _color,
+            avatar: _avatar,
           );
       if (!mounted) return;
       setState(() => _changed = false);
@@ -105,14 +176,52 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             child: PulseHalo(
               active: true,
               size: 150,
-              child: SeedAvatar(
-                seedId: user.id,
-                name: _name.text.isEmpty ? user.name : _name.text,
-                colorHex: _color,
-                size: 124,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  SeedAvatar(
+                    seedId: user.id,
+                    name: _name.text.isEmpty ? user.name : _name.text,
+                    colorHex: _color,
+                    avatar: _avatar.isEmpty ? null : _avatar,
+                    size: 124,
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: _pickAvatar,
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: palette.accent,
+                          border: Border.all(color: palette.background, width: 3),
+                        ),
+                        child: Icon(Icons.photo_camera_rounded,
+                            size: 18, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
+          if (_avatar.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Center(
+                child: TextButton.icon(
+                  onPressed: _removeAvatar,
+                  icon: Icon(Icons.delete_outline_rounded,
+                      size: 18, color: palette.textMuted),
+                  label: Text(strings.get('removePhoto'),
+                      style: TextStyle(color: palette.textMuted, fontSize: 13)),
+                ),
+              ),
+            ),
           const SizedBox(height: 20),
           Center(
             child: Text(
