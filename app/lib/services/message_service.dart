@@ -243,9 +243,26 @@ class MessageService {
       id: group.id,
       title: group.title,
       avatar: group.avatar,
-      memberCount: group.members.length,
+      memberCount: group.memberCount,
     );
     await store.upsertChat(chat);
+  }
+
+  Future<Group> updateGroup(
+    String groupId, {
+    String? title,
+    String? avatar,
+  }) async {
+    final group = await api.updateGroup(groupId, title: title, avatar: avatar);
+    final existing = await store.getChat(groupId);
+    if (existing != null) {
+      await store.upsertChat(existing.copyWith(
+        peerName: group.title,
+        peerAvatar: group.avatar,
+        memberCount: group.memberCount,
+      ));
+    }
+    return group;
   }
 
   Future<void> _distributeKey(String groupId, List<String> memberIds) async {

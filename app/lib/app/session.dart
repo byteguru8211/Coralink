@@ -8,6 +8,7 @@ import '../data/api_client.dart';
 import '../domain/models.dart';
 import '../network/call.dart';
 import '../network/realtime.dart';
+import '../services/keep_alive.dart';
 import 'client_bundle.dart';
 import 'dependencies.dart';
 
@@ -203,6 +204,7 @@ class SessionController extends Notifier<SessionState> {
       client: bundle,
       pendingToken: token,
     );
+    unawaited(startKeepAlive());
   }
 
   Future<void> deleteAccount() async {
@@ -228,6 +230,7 @@ class SessionController extends Notifier<SessionState> {
     await ref.read(localStoreProvider).clearUserData();
     ref.read(audioProvider).stopRustle();
     await ref.read(notificationProvider).cancelAll();
+    await stopKeepAlive();
     state = const SessionState(status: SessionStatus.unauthenticated);
   }
 

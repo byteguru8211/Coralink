@@ -473,6 +473,7 @@ class Group {
     required this.title,
     this.avatar = '',
     this.createdBy = '',
+    this.memberCount = 0,
     this.members = const [],
   });
 
@@ -480,6 +481,7 @@ class Group {
   final String title;
   final String avatar;
   final String createdBy;
+  final int memberCount;
   final List<GroupMember> members;
 
   factory Group.fromJson(Map<String, dynamic> json) {
@@ -488,11 +490,13 @@ class Group {
             ?.map((e) => GroupMember.fromJson(e as Map<String, dynamic>))
             .toList() ??
         const <GroupMember>[];
+    final count = (raw['memberCount'] as num?)?.toInt() ?? members.length;
     return Group(
       id: raw['id'] as String,
       title: (raw['title'] as String?) ?? '',
       avatar: (raw['avatar'] as String?) ?? '',
       createdBy: (raw['createdBy'] as String?) ?? '',
+      memberCount: count,
       members: members,
     );
   }

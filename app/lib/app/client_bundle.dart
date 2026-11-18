@@ -94,7 +94,7 @@ class ClientBundle {
           id: group.id,
           title: group.title,
           avatar: group.avatar,
-          memberCount: group.members.length,
+          memberCount: group.memberCount,
         ));
       }
     } catch (_) {

@@ -3,7 +3,7 @@
 const { randomUUID } = require('node:crypto');
 const { requireAuth } = require('../auth');
 const { HttpError, sendJson } = require('../lib/http');
-const { isPlainObject } = require('../lib/validate');
+const { isPlainObject, normalizeAvatar } = require('../lib/validate');
 
 const MAX_TITLE = 64;
 const MAX_MEMBERS = 256;
@@ -102,6 +102,40 @@ function registerGroupRoutes(router) {
       group,
       members: context.db.listGroupMembers(group.id),
     });
+  });
+
+  // Update group title/avatar. Owner or admin only.
+  router.add('PATCH', '/api/v1/groups/:id', async (context) => {
+    const user = requireAuth(context);
+    const body = requireBody(context);
+    const group = context.db.getGroup(context.params.id);
+    if (!group) throw new HttpError(404, 'group_not_found', 'Group not found');
+    const members = context.db.listGroupMembers(group.id);
+    const me = members.find((m) => m.id === user.id);
+    if (!me || (me.role !== 'owner' && me.role !== 'admin')) {
+      throw new HttpError(403, 'not_allowed', 'Only an admin can update the group');
+    }
+    const changes = {};
+    if (body.title !== undefined) {
+      const title = normalizeTitle(body.title);
+      if (title === null) {
+        throw new HttpError(
+          400,
+          'invalid_title',
+          `Title must be between 1 and ${MAX_TITLE} characters`,
+        );
+      }
+      changes.title = title;
+    }
+    if (body.avatar !== undefined) {
+      const avatar = normalizeAvatar(body.avatar);
+      if (avatar === null) {
+        throw new HttpError(400, 'invalid_avatar', 'avatar must be a base64 image data URL under 500 KB');
+      }
+      changes.avatar = avatar;
+    }
+    const updated = context.db.updateGroup(group.id, changes);
+    sendJson(context.res, 200, { group: updated, members });
   });
 
   // Add a member (any current member may invite).

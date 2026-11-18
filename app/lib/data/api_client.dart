@@ -278,6 +278,18 @@ class ApiClient {
   Future<void> leaveGroup(String groupId, String userId) =>
       _send('DELETE', '/groups/$groupId/members/$userId');
 
+  Future<Group> updateGroup(
+    String groupId, {
+    String? title,
+    String? avatar,
+  }) async {
+    final json = await _send('PATCH', '/groups/$groupId', body: {
+      if (title != null) 'title': title,
+      if (avatar != null) 'avatar': avatar,
+    });
+    return Group.fromJson(json);
+  }
+
   Future<List<IncomingMessageDto>> pendingGroupMessages() async {
     final json = await _send('GET', '/groups/queued');
     return (json['messages'] as List)

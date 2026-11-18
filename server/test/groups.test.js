@@ -97,6 +97,39 @@ test('group message is delivered live to online members and queued for offline',
   assert.ok(!after.body.messages.some((m) => m.id === msgId));
 });
 
+test('groups list reports member counts and only admins can update', async (t) => {
+  const app = await startTestApp();
+  t.after(() => app.close());
+  const alice = await makeUser(app, '79000000040', 'Alice');
+  const bob = await makeUser(app, '79000000041', 'Bob');
+
+  const created = await app.api('/api/v1/groups', {
+    method: 'POST',
+    token: alice.token,
+    body: { title: 'Trio', members: [bob.user.id] },
+  });
+  const gid = created.body.group.id;
+
+  const list = await app.api('/api/v1/groups', { token: alice.token });
+  const entry = list.body.groups.find((g) => g.id === gid);
+  assert.strictEqual(entry.memberCount, 2);
+
+  const denied = await app.api(`/api/v1/groups/${gid}`, {
+    method: 'PATCH',
+    token: bob.token,
+    body: { title: 'Renamed by member' },
+  });
+  assert.strictEqual(denied.status, 403);
+
+  const ok = await app.api(`/api/v1/groups/${gid}`, {
+    method: 'PATCH',
+    token: alice.token,
+    body: { title: 'Renamed by owner' },
+  });
+  assert.strictEqual(ok.status, 200);
+  assert.strictEqual(ok.body.group.title, 'Renamed by owner');
+});
+
 test('non-member cannot send to a group', async (t) => {
   const app = await startTestApp();
   t.after(() => app.close());

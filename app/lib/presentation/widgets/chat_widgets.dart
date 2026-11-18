@@ -388,12 +388,14 @@ class ChatTile extends StatelessWidget {
     final palette = context.palette;
     final unread = chat.unreadCount > 0;
     final online = chat.peerPresence != Presence.offline;
-    final statusLabel = switch (chat.peerPresence) {
-      Presence.online => strings.get('online'),
-      Presence.active => strings.get('active'),
-      Presence.away => strings.get('away'),
-      Presence.offline => lastSeenLabel(chat.peerLastSeen, strings),
-    };
+    final statusLabel = chat.isGroup
+        ? strings.get('membersCount').replaceAll('{count}', '${chat.memberCount}')
+        : switch (chat.peerPresence) {
+            Presence.online => strings.get('online'),
+            Presence.active => strings.get('active'),
+            Presence.away => strings.get('away'),
+            Presence.offline => lastSeenLabel(chat.peerLastSeen, strings),
+          };
 
     final content = InkWell(
       onTap: onTap,

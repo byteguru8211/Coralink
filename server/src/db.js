@@ -735,9 +735,10 @@ class CoralinkDatabase {
   listGroupsForUser(userId) {
     return this.db
       .prepare(
-        `SELECT g.* FROM groups g
-         JOIN group_members m ON m.group_id = g.id
-         WHERE m.user_id = ?
+        `SELECT g.*, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
+         FROM groups g
+         JOIN group_members gm ON gm.group_id = g.id
+         WHERE gm.user_id = ?
          ORDER BY g.created_at DESC`,
       )
       .all(userId)
@@ -746,8 +747,21 @@ class CoralinkDatabase {
         title: row.title,
         avatar: row.avatar || '',
         createdBy: row.created_by,
+        memberCount: Number(row.member_count || 0),
         createdAt: row.created_at,
       }));
+  }
+
+  updateGroup(id, { title = null, avatar = null }) {
+    this.db
+      .prepare(
+        `UPDATE groups
+         SET title = COALESCE(?, title),
+             avatar = COALESCE(?, avatar)
+         WHERE id = ?`,
+      )
+      .run(title, avatar, id);
+    return this.getGroup(id);
   }
 
   listGroupMembers(groupId) {

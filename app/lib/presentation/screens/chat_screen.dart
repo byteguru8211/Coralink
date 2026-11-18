@@ -26,6 +26,8 @@ import 'call_screen.dart';
 
 enum _Attach { gallery, camera, file, video }
 
+enum _AvatarChoice { gallery, camera, remove }
+
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.chatId, this.initialTitle});
   final String chatId;
@@ -882,6 +884,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     if (!mounted) return;
     final myId = ref.read(sessionProvider).user?.id;
+    final isAdmin = group.members.any(
+      (m) => m.id == myId && (m.role == 'owner' || m.role == 'admin'),
+    );
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -894,13 +899,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                child: Text(
-                  '${strings.get('groupMembers')} · ${group.members.length}',
-                  style: TextStyle(
-                    color: palette.textPrimary,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                  ),
+                child: Row(
+                  children: [
+                    SeedAvatar(
+                      seedId: chat.id,
+                      name: group.title,
+                      avatar: group.avatar,
+                      size: 44,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            group.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: palette.textPrimary,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            strings
+                                .get('membersCount')
+                                .replaceAll('{count}', '${group.memberCount}'),
+                            style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
               for (final member in group.members)
@@ -921,12 +952,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   subtitle: Text(
                     member.username.isNotEmpty
                         ? '@${member.username}'
-                        : member.role,
+                        : '',
                     style: TextStyle(color: palette.textMuted, fontSize: 12.5),
                   ),
-                  trailing: member.role == 'owner'
-                      ? Icon(Icons.star_rounded, color: palette.accent, size: 20)
+                  trailing: (member.role == 'owner' || member.role == 'admin')
+                      ? Chip(
+                          label: Text(strings.get('roleAdmin'),
+                              style: TextStyle(fontSize: 11, color: palette.accent)),
+                          backgroundColor:
+                              palette.accent.withValues(alpha: 0.12),
+                          side: BorderSide(color: palette.divider),
+                        )
                       : null,
+                ),
+              if (isAdmin)
+                SettingsTile(
+                  icon: Icons.edit_outlined,
+                  title: strings.get('renameGroup'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _renameGroup(chat.id, group.title, strings);
+                  },
+                ),
+              if (isAdmin)
+                SettingsTile(
+                  icon: Icons.image_outlined,
+                  title: strings.get('groupAvatar'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _setGroupAvatar(chat.id, strings);
+                  },
                 ),
               SettingsTile(
                 icon: Icons.person_add_alt_1_rounded,
@@ -975,6 +1030,108 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _renameGroup(String groupId, String current, AppStrings strings) async {
+    final palette = context.palette;
+    final controller = TextEditingController(text: current);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: palette.surface,
+        title: Text(strings.get('renameGroup')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 64,
+          decoration: InputDecoration(labelText: strings.get('groupTitle')),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(strings.get('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(strings.get('save')),
+          ),
+        ],
+      ),
+    );
+    final title = controller.text.trim();
+    controller.dispose();
+    if (saved != true || title.isEmpty || title == current) return;
+    try {
+      await ref.read(clientProvider).messages.updateGroup(groupId, title: title);
+      await ref.read(chatsProvider.notifier).refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
+  }
+
+  Future<void> _setGroupAvatar(String groupId, AppStrings strings) async {
+    final mobile = defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    final source = await showModalBottomSheet<_AvatarChoice>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SettingsTile(
+              icon: Icons.photo_library_outlined,
+              title: strings.get('gallery'),
+              onTap: () => Navigator.pop(context, _AvatarChoice.gallery),
+            ),
+            if (mobile)
+              SettingsTile(
+                icon: Icons.photo_camera_outlined,
+                title: strings.get('camera'),
+                onTap: () => Navigator.pop(context, _AvatarChoice.camera),
+              ),
+            SettingsTile(
+              icon: Icons.delete_outline_rounded,
+              title: strings.get('removePhoto'),
+              onTap: () => Navigator.pop(context, _AvatarChoice.remove),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    try {
+      String avatar = '';
+      if (source != _AvatarChoice.remove) {
+        final file = await ImagePicker().pickImage(
+          source: source == _AvatarChoice.camera ? ImageSource.camera : ImageSource.gallery,
+          maxWidth: 320,
+          maxHeight: 320,
+          imageQuality: 82,
+        );
+        if (file == null) return;
+        final bytes = await file.readAsBytes();
+        if (bytes.lengthInBytes > 360 * 1024) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(strings.get('imageTooLarge'))),
+          );
+          return;
+        }
+        avatar = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+      }
+      await ref.read(clientProvider).messages.updateGroup(groupId, avatar: avatar);
+      await ref.read(chatsProvider.notifier).refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
   }
 
   Future<void> _inviteToGroup(String groupId, AppStrings strings) async {
