@@ -38,6 +38,10 @@ class P2PManager {
 
   static const _label = 'coralink-data';
 
+  // WebRTC DataChannels abort the process under the bundled libwebrtc's forced
+  // Unified Plan, so direct P2P links are disabled; the relay handles delivery.
+  static final bool _dataChannelSupported = false;
+
   bool isDirect(String peerId) => _links[peerId]?.channel?.state ==
       RTCDataChannelState.RTCDataChannelOpen;
 
@@ -51,10 +55,21 @@ class P2PManager {
               'credential': _config.turnCredential,
             },
         ],
-        'sdpSemantics': 'unified-plan',
+        // DataChannels require Plan-B in the bundled libwebrtc; creating a
+        // data channel under Unified Plan trips a native CHECK and aborts the
+        // whole process. Media calls (this file's peer connections only carry
+        // data channels) therefore pin plan-b.
+        'sdpSemantics': 'plan-b',
       };
 
   Future<void> ensureLink(String peerId) async {
+    // P2P direct links rely on WebRTC DataChannels, but the libwebrtc bundled
+    // with flutter_webrtc 1.6.3 forces Unified Plan and aborts the process on
+    // createDataChannel (native CHECK `!IsUnifiedPlan()`). The WebSocket relay
+    // already delivers every message end-to-end, so the direct-link
+    // optimization is disabled to keep the app stable. isDirect() stays false
+    // and all sends take the relay path.
+    if (!_dataChannelSupported) return;
     if (_links.containsKey(peerId)) return;
     if (!_realtime.isConnected) return;
     final initiator = _identityOfSelf.compareTo(peerId) < 0;

@@ -179,7 +179,11 @@ class CallService {
     };
     _pc!.onConnectionState = (state) {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+          state == RTCPeerConnectionState.RTCPeerConnectionStateClosed ||
+          state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        // A remote hangup closes the peer connection; 'disconnected' is the
+        // first state observed, so tearing down here ends the call promptly
+        // even if the explicit hangup signal is missed.
         unawaited(_teardown());
       } else if (state ==
           RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
@@ -205,7 +209,15 @@ class CallService {
           : false,
     });
     localRenderer.srcObject = _local;
-    await _pc!.addStream(_local!);
+    // Add tracks individually (Unified Plan). The legacy addStream path can
+    // hit a native WebRTC CHECK on the signaling thread and abort the process.
+    final stream = _local!;
+    for (final track in stream.getAudioTracks()) {
+      await _pc!.addTrack(track, stream);
+    }
+    for (final track in stream.getVideoTracks()) {
+      await _pc!.addTrack(track, stream);
+    }
   }
 
   void _onEvent(RealtimeEvent event) {
