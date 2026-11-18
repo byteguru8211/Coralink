@@ -18,6 +18,7 @@ class AppSettings {
     this.volume = 0.7,
     this.privacyScope = PrivacyScope.contacts,
     this.autoArchiveDays = 7,
+    this.serverUrl = '',
   });
 
   final ThemeMode themeMode;
@@ -29,6 +30,7 @@ class AppSettings {
   final double volume;
   final PrivacyScope privacyScope;
   final int autoArchiveDays;
+  final String serverUrl;
 
   AppSettings copyWith({
     ThemeMode? themeMode,
@@ -40,6 +42,7 @@ class AppSettings {
     double? volume,
     PrivacyScope? privacyScope,
     int? autoArchiveDays,
+    String? serverUrl,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -51,6 +54,7 @@ class AppSettings {
         volume: volume ?? this.volume,
         privacyScope: privacyScope ?? this.privacyScope,
         autoArchiveDays: autoArchiveDays ?? this.autoArchiveDays,
+        serverUrl: serverUrl ?? this.serverUrl,
       );
 
   Map<String, dynamic> toJson() => {
@@ -63,6 +67,7 @@ class AppSettings {
         'volume': volume,
         'privacy': privacyScope.name,
         'autoArchiveDays': autoArchiveDays,
+        'serverUrl': serverUrl,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -84,6 +89,7 @@ class AppSettings {
           orElse: () => PrivacyScope.contacts,
         ),
         autoArchiveDays: (json['autoArchiveDays'] as num?)?.toInt() ?? 7,
+        serverUrl: (json['serverUrl'] as String?) ?? '',
       );
 }
 

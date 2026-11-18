@@ -19,7 +19,8 @@ String presenceToWire(Presence p) => switch (p) {
 class User {
   const User({
     required this.id,
-    required this.phone,
+    this.username = '',
+    this.phone = '',
     required this.name,
     this.about = '',
     this.avatarColor = '#1A9C7A',
@@ -28,6 +29,7 @@ class User {
   });
 
   final String id;
+  final String username;
   final String phone;
   final String name;
   final String about;
@@ -49,6 +51,7 @@ class User {
   }) =>
       User(
         id: id,
+        username: username,
         phone: phone,
         name: name ?? this.name,
         about: about ?? this.about,
@@ -59,6 +62,7 @@ class User {
 
   factory User.fromJson(Map<String, dynamic> json) => User(
         id: json['id'] as String,
+        username: (json['username'] as String?) ?? '',
         phone: (json['phone'] as String?) ?? '',
         name: (json['name'] as String?) ?? 'Coralink',
         about: (json['about'] as String?) ?? '',

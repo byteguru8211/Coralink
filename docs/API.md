@@ -44,6 +44,21 @@ POST /api/v1/auth/verify
 
 `phone` нормализуется до 10–15 цифр. Неверный код → `401 invalid_code`; превышение попыток → `429`.
 
+```
+POST /api/v1/auth/identify
+{"username":"alice","name":"Alice Doe"}   // name необязателен
+→ 200 {
+  "token":"eyJ...",
+  "user":{"id":"...","username":"alice","name":"Alice Doe","about":"","avatarColor":"#1A9C7A","lastSeen":1730000000000,"online":true,"phone":null},
+  "isNew":true
+}
+```
+
+Открытый вход без кода: существующий ник → тот же аккаунт (`isNew:false`), новый
+ник → создание (`isNew:true`). `username`: 3–32, латиница/цифры/`.`/`_`. Неверный
+→ `400 invalid_username`. Используется по умолчанию в конфигурации Tailscale;
+SMS-маршруты выше сохранены для будущего включения.
+
 ### Профиль
 
 ```

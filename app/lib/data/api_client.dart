@@ -153,24 +153,14 @@ class ApiClient {
     }
   }
 
-  Future<({int retryAfter, String? devCode})> requestCode(String phone) async {
+  Future<AuthSession> identify(String username, {String? name}) async {
     final json = await _send(
       'POST',
-      '/auth/request-code',
-      body: {'phone': phone},
-      auth: false,
-    );
-    return (
-      retryAfter: (json['retryAfter'] as num?)?.toInt() ?? 60,
-      devCode: json['devCode'] as String?,
-    );
-  }
-
-  Future<AuthSession> verifyCode(String phone, String code) async {
-    final json = await _send(
-      'POST',
-      '/auth/verify',
-      body: {'phone': phone, 'code': code},
+      '/auth/identify',
+      body: {
+        'username': username,
+        if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+      },
       auth: false,
     );
     final token = json['token'] as String;

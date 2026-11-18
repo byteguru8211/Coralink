@@ -82,15 +82,10 @@ Future<List<IncomingMessageDto>> _waitForQueue(
   throw TimeoutException('No queued message appeared within $timeout');
 }
 
-Future<TestClient> _connect(String phone) async {
+Future<TestClient> _connect(String username) async {
   final config = _config();
   final api = ApiClient(baseUrl: config.apiBaseUrl);
-  final codeResult = await api.requestCode(phone);
-  final devCode = codeResult.devCode;
-  if (devCode == null) {
-    throw StateError('Server is not in DEV_MODE; no code returned');
-  }
-  final auth = await api.verifyCode(phone, devCode);
+  final auth = await api.identify(username, name: username);
   final secure = FakeSecureStore();
   final store = MemoryLocalStore();
   final signal = await SignalService.load(
@@ -141,11 +136,11 @@ Future<void> main() async {
     timeout: const Timeout(Duration(seconds: 90)),
     () async {
       final suffix = DateTime.now().millisecondsSinceEpoch % 1000000000;
-      final phoneA = '79${suffix.toString().padLeft(9, '0')}';
-      final phoneB = '79${((suffix + 7) % 1000000000).toString().padLeft(9, '0')}';
+      final nameA = 'u${suffix.toString()}';
+      final nameB = 'u${((suffix + 7) % 1000000000).toString()}';
 
-      final alice = await _connect(phoneA);
-      final bob = await _connect(phoneB);
+      final alice = await _connect(nameA);
+      final bob = await _connect(nameB);
       addTearDown(() async {
         await alice.dispose();
         await bob.dispose();

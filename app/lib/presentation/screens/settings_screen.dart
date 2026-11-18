@@ -151,6 +151,14 @@ class SettingsScreen extends ConsumerWidget {
                   title: strings.get('exportChats'),
                   onTap: () => _exportChats(context, ref, strings),
                 ),
+                SettingsTile(
+                  icon: Icons.link_rounded,
+                  title: strings.get('serverLink'),
+                  subtitle: settings.serverUrl.isEmpty
+                      ? strings.get('serverLinkNote')
+                      : settings.serverUrl,
+                  onTap: () => _editServerUrl(context, ref, strings, settings.serverUrl),
+                ),
               ],
             ),
           ),
@@ -373,6 +381,51 @@ class SettingsScreen extends ConsumerWidget {
               : '${strings.get('exportPath')} $path',
         ),
       ),
+    );
+  }
+
+  Future<void> _editServerUrl(
+    BuildContext context,
+    WidgetRef ref,
+    AppStrings strings,
+    String current,
+  ) async {
+    final palette = context.palette;
+    final controller = TextEditingController(text: current);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: palette.surface,
+        title: Text(strings.get('serverLink')),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: InputDecoration(
+            hintText: 'https://host.tailnet.ts.net',
+            helperText: strings.get('serverLinkNote'),
+            helperMaxLines: 3,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(strings.get('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(strings.get('save')),
+          ),
+        ],
+      ),
+    );
+    final value = controller.text.trim();
+    controller.dispose();
+    if (saved != true || value.isEmpty || value == current) return;
+    await ref.read(settingsProvider.notifier).setServerUrl(value);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(strings.get('serverLinkSaved'))),
     );
   }
 }

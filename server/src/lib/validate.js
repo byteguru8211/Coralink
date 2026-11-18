@@ -4,6 +4,27 @@ const PHONE_MIN_DIGITS = 10;
 const PHONE_MAX_DIGITS = 15;
 const MAX_NAME_LENGTH = 64;
 const MAX_ABOUT_LENGTH = 280;
+const USERNAME_MIN_LENGTH = 3;
+const USERNAME_MAX_LENGTH = 32;
+
+/**
+ * Normalizes a nickname/handle used for open (code-free) registration.
+ * Accepts lowercase latin letters, digits, dot and underscore. Returns null
+ * when the input cannot form a valid handle.
+ */
+function normalizeUsername(input) {
+  if (typeof input !== 'string') return null;
+  const value = input.trim().toLowerCase();
+  if (
+    value.length < USERNAME_MIN_LENGTH ||
+    value.length > USERNAME_MAX_LENGTH
+  ) {
+    return null;
+  }
+  if (!/^[a-z0-9._]+$/.test(value)) return null;
+  if (!/^[a-z0-9]/.test(value) || !/[a-z0-9]$/.test(value)) return null;
+  return value;
+}
 
 /**
  * Normalizes a user-supplied phone number to a string of 10-15 digits.
@@ -130,6 +151,8 @@ function isNonEmptyString(value, max = 128) {
 module.exports = {
   MAX_ABOUT_LENGTH,
   MAX_NAME_LENGTH,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
   decodeBase64Length,
   escapeLike,
   isBase64String,
@@ -143,5 +166,6 @@ module.exports = {
   normalizeAbout,
   normalizeName,
   normalizePhone,
+  normalizeUsername,
   toSafeInteger,
 };

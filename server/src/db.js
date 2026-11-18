@@ -8,7 +8,8 @@ const { escapeLike } = require('./lib/validate');
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  phone TEXT UNIQUE NOT NULL,
+  phone TEXT UNIQUE,
+  username TEXT UNIQUE,
   name TEXT NOT NULL,
   about TEXT DEFAULT '',
   avatar_color TEXT DEFAULT '#1A9C7A',
@@ -70,13 +71,15 @@ CREATE INDEX IF NOT EXISTS idx_messages_recipient_delivered
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 `;
 
 function mapUser(row) {
   if (!row) return null;
   return {
     id: row.id,
-    phone: row.phone,
+    phone: row.phone ?? null,
+    username: row.username ?? null,
     name: row.name,
     about: row.about || '',
     avatarColor: row.avatar_color || '#1A9C7A',
@@ -153,14 +156,23 @@ class CoralinkDatabase {
         "ALTER TABLE users ADD COLUMN presence_visibility TEXT NOT NULL DEFAULT 'contacts'",
       );
     }
+    if (!userColumns.some((column) => column.name === 'username')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN username TEXT');
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)',
+      );
+    }
 
     this.stmts = {
       getUserById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
       getUserByPhone: this.db.prepare('SELECT * FROM users WHERE phone = ?'),
+      getUserByUsername: this.db.prepare(
+        'SELECT * FROM users WHERE username = ?',
+      ),
       insertUser: this.db.prepare(`
         INSERT INTO users
-          (id, phone, name, about, avatar_color, created_at, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (id, phone, username, name, about, avatar_color, created_at, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `),
       updateUserProfile: this.db.prepare(`
         UPDATE users
@@ -179,6 +191,7 @@ class CoralinkDatabase {
           AND (
             phone LIKE ? ESCAPE '!'
             OR unicode_lower(name) LIKE unicode_lower(?) ESCAPE '!'
+            OR unicode_lower(username) LIKE unicode_lower(?) ESCAPE '!'
           )
         ORDER BY unicode_lower(name), id
         LIMIT ?
@@ -186,7 +199,10 @@ class CoralinkDatabase {
       searchName: this.db.prepare(`
         SELECT * FROM users
         WHERE id <> ?
-          AND unicode_lower(name) LIKE unicode_lower(?) ESCAPE '!'
+          AND (
+            unicode_lower(name) LIKE unicode_lower(?) ESCAPE '!'
+            OR unicode_lower(username) LIKE unicode_lower(?) ESCAPE '!'
+          )
         ORDER BY unicode_lower(name), id
         LIMIT ?
       `),
@@ -343,9 +359,14 @@ class CoralinkDatabase {
     return mapUser(this.stmts.getUserByPhone.get(phone));
   }
 
+  getUserByUsername(username) {
+    return mapUser(this.stmts.getUserByUsername.get(username));
+  }
+
   createUser({
     id,
-    phone,
+    phone = null,
+    username = null,
     name,
     about = '',
     avatarColor = '#1A9C7A',
@@ -355,6 +376,7 @@ class CoralinkDatabase {
     this.stmts.insertUser.run(
       id,
       phone,
+      username,
       name,
       about,
       avatarColor,
@@ -398,15 +420,21 @@ class CoralinkDatabase {
 
   searchUsers(query, excludeId, limit = 20) {
     const trimmed = String(query).trim();
-    const namePattern = `${escapeLike(trimmed)}%`;
+    const pattern = `${escapeLike(trimmed)}%`;
     if (/^\+?\d+$/.test(trimmed)) {
       const digits = trimmed.replace(/\D/g, '');
       return this.stmts.searchBoth
-        .all(excludeId, `%${escapeLike(digits)}%`, namePattern, limit)
+        .all(
+          excludeId,
+          `%${escapeLike(digits)}%`,
+          pattern,
+          pattern,
+          limit,
+        )
         .map(mapUser);
     }
     return this.stmts.searchName
-      .all(excludeId, namePattern, limit)
+      .all(excludeId, pattern, pattern, limit)
       .map(mapUser);
   }
 

@@ -41,7 +41,7 @@ class SessionController extends Notifier<SessionState> {
   Future<void> _restore() async {
     final secure = ref.read(secureStoreProvider);
     final store = ref.read(localStoreProvider);
-    final config = ref.read(configProvider);
+    final config = ref.read(effectiveConfigProvider);
     final token = await secure.token;
     if (token == null || token.isEmpty) {
       state = const SessionState(status: SessionStatus.unauthenticated);
@@ -92,19 +92,10 @@ class SessionController extends Notifier<SessionState> {
     await _restore();
   }
 
-  Future<({int retryAfter, String? devCode})> requestCode(String phone) async {
-    final api = ApiClient(baseUrl: ref.read(configProvider).apiBaseUrl);
+  Future<void> identify(String username, {String? name}) async {
+    final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
     try {
-      return await api.requestCode(phone);
-    } finally {
-      api.close();
-    }
-  }
-
-  Future<void> verifyCode(String phone, String code) async {
-    final api = ApiClient(baseUrl: ref.read(configProvider).apiBaseUrl);
-    try {
-      final auth = await api.verifyCode(phone, code);
+      final auth = await api.identify(username, name: name);
       await ref.read(secureStoreProvider).setToken(auth.token);
       await ref.read(localStoreProvider).upsertUser(auth.user);
       if (auth.isNew) {
@@ -125,7 +116,7 @@ class SessionController extends Notifier<SessionState> {
     final token = state.pendingToken;
     if (token == null) throw StateError('No pending session');
     final api = ApiClient(
-      baseUrl: ref.read(configProvider).apiBaseUrl,
+      baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl,
       token: token,
     );
     try {
@@ -179,7 +170,7 @@ class SessionController extends Notifier<SessionState> {
   Future<void> _activate(User user, String token) async {
     await state.client?.dispose();
     final bundle = await ClientBundle.create(
-      config: ref.read(configProvider),
+      config: ref.read(effectiveConfigProvider),
       secure: ref.read(secureStoreProvider),
       store: ref.read(localStoreProvider),
       token: token,

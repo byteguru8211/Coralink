@@ -17,6 +17,7 @@ const {
   normalizeAbout,
   normalizeName,
   normalizePhone,
+  normalizeUsername,
 } = require('../lib/validate');
 const { toPrivateUser } = require('./users');
 
@@ -166,6 +167,69 @@ function registerAuthRoutes(router) {
         }
         context.db.deleteAuthCode(phone);
       });
+
+      const token = signJwt(user, context.config.jwtSecret);
+      sendJson(context.res, 200, {
+        token,
+        user: toPrivateUser(user, context.hub),
+        isNew,
+      });
+    },
+    { rateLimit: 'verify' },
+  );
+
+  // Open registration/login by nickname. No verification code: a single
+  // request identifies an existing account or creates a new one. Intended for
+  // trusted-network deployments (e.g. a Tailscale tailnet); swap for a code or
+  // email flow before exposing this endpoint publicly.
+  router.add(
+    'POST',
+    '/api/v1/auth/identify',
+    async (context) => {
+      const body = requireBody(context);
+      const username = normalizeUsername(body.username);
+      if (!username) {
+        throw new HttpError(
+          400,
+          'invalid_username',
+          'Username must be 3-32 characters (letters, digits, dot, underscore)',
+        );
+      }
+
+      const now = Date.now();
+      let requestedName;
+      if (body.name !== undefined) {
+        requestedName = normalizeName(body.name);
+        if (requestedName === null) {
+          throw new HttpError(
+            400,
+            'invalid_name',
+            'Name must be between 1 and 64 characters',
+          );
+        }
+      }
+
+      let user = context.db.getUserByUsername(username);
+      let isNew = false;
+      if (!user) {
+        const fallbackName = requestedName || username;
+        const fallbackAbout =
+          body.about !== undefined && normalizeAbout(body.about) !== null
+            ? normalizeAbout(body.about)
+            : '';
+        user = context.db.createUser({
+          id: randomUUID(),
+          username,
+          name: fallbackName,
+          about: fallbackAbout,
+          avatarColor: '#1A9C7A',
+          createdAt: now,
+          lastSeen: now,
+        });
+        isNew = true;
+      } else if (requestedName !== undefined && requestedName !== user.name) {
+        user = context.db.updateUserProfile(user.id, { name: requestedName });
+      }
 
       const token = signJwt(user, context.config.jwtSecret);
       sendJson(context.res, 200, {

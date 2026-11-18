@@ -63,4 +63,27 @@ class AppConfig {
   }
 
   bool get supportsSecureStorage => !kIsWeb;
+
+  /// Returns a copy of this config whose API/WS endpoints point at [override]
+  /// (a user-pasted server link such as a Tailscale `*.ts.net` HTTPS URL). The
+  /// WebSocket URL is re-derived from the new base unless it was pinned at
+  /// build time. An empty or null [override] keeps the compiled defaults.
+  AppConfig withBaseUrl(String? override) {
+    final trimmed = override?.trim() ?? '';
+    if (trimmed.isEmpty) return this;
+    var base = trimmed.replaceAll(RegExp(r'/+$'), '');
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      base = 'https://$base';
+    }
+    final ws = '${base.replaceFirst('http', 'ws')}/ws';
+    return AppConfig(
+      apiBaseUrl: base,
+      wsUrl: ws,
+      devMode: devMode,
+      stunUrl: stunUrl,
+      turnUrl: turnUrl,
+      turnUsername: turnUsername,
+      turnCredential: turnCredential,
+    );
+  }
 }

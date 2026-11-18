@@ -181,6 +181,7 @@ Plan/PLAN.docx          исходное ТЗ
 - [Безопасность и модель угроз](docs/SECURITY.md)
 - [API сервера](docs/API.md)
 - [Развёртывание](docs/DEPLOYMENT.md)
+- [Запуск через Tailscale (одна ссылка, без вложений)](docs/DEPLOYMENT-TAILSCALE.md)
 - [Тестирование](docs/TESTING.md)
 - [Руководство пользователя](docs/USER_GUIDE.md)
 

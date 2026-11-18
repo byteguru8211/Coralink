@@ -72,10 +72,21 @@ class SettingsController extends Notifier<AppSettings> {
 
   Future<void> setAutoArchiveDays(int days) =>
       _update(state.copyWith(autoArchiveDays: days));
+
+  Future<void> setServerUrl(String url) =>
+      _update(state.copyWith(serverUrl: url.trim()));
 }
 
 final settingsProvider =
     NotifierProvider<SettingsController, AppSettings>(SettingsController.new);
+
+/// The config actually used by network clients: the compiled default with the
+/// user's saved server link (e.g. a Tailscale `*.ts.net` URL) applied on top.
+final effectiveConfigProvider = Provider<AppConfig>((ref) {
+  final base = ref.watch(configProvider);
+  final url = ref.watch(settingsProvider).serverUrl;
+  return base.withBaseUrl(url);
+});
 
 final stringsProvider = Provider<AppStrings>((ref) {
   final settings = ref.watch(settingsProvider);

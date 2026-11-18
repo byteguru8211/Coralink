@@ -13,6 +13,7 @@ const {
 function toPublicUser(user, hub) {
   return {
     id: user.id,
+    username: user.username ?? null,
     name: user.name,
     about: user.about,
     avatarColor: user.avatarColor,
@@ -24,7 +25,7 @@ function toPublicUser(user, hub) {
 function toPrivateUser(user, hub) {
   return {
     ...toPublicUser(user, hub),
-    phone: user.phone,
+    phone: user.phone ?? null,
     createdAt: user.createdAt,
   };
 }
