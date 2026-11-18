@@ -184,6 +184,7 @@ Plan/PLAN.docx          исходное ТЗ
 - [API сервера](docs/API.md)
 - [Развёртывание](docs/DEPLOYMENT.md)
 - [Запуск через Tailscale (одна ссылка, без вложений)](docs/DEPLOYMENT-TAILSCALE.md)
+- [Дорожная карта: группы, каналы, звонки, AV-сообщения](docs/ROADMAP-GROUPS-CHANNELS-CALLS.md)
 - [Тестирование](docs/TESTING.md)
 - [Руководство пользователя](docs/USER_GUIDE.md)
 
