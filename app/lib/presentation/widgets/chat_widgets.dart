@@ -1,13 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../core/app_colors.dart';
 import '../../core/strings.dart';
 import '../../core/utils.dart';
 import '../../domain/models.dart';
+import '../../services/video_note_media.dart';
 import 'coral_widgets.dart';
 
 class MessageBubble extends StatefulWidget {
@@ -124,6 +128,16 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
             if (message.isImage) const SizedBox(height: 6),
             if (message.isAudio) _AudioBubble(message: message, mine: mine),
             if (message.isAudio && message.text.isNotEmpty) const SizedBox(height: 6),
+            if (message.isVideoNote)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: _VideoNoteBubble(
+                  base64Data: (message.meta['data'] as String?) ?? '',
+                  mime: (message.meta['mime'] as String?) ?? 'video/mp4',
+                  mine: mine,
+                ),
+              ),
+            if (message.isVideoNote && message.text.isNotEmpty) const SizedBox(height: 6),
             if (message.isFile || message.isVideo)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -619,4 +633,249 @@ class _AudioBubbleState extends State<_AudioBubble> {
 
   String _formatClock(Duration d) =>
       '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
+}
+
+/// A Telegram-style circular video note. The clip autoplays and loops inside a
+/// round mask; while playing a coral ripple emanates from the edge and a thin
+/// progress arc traces the ring, giving the note a distinct "living seal" look.
+class _VideoNoteBubble extends StatefulWidget {
+  const _VideoNoteBubble({
+    required this.base64Data,
+    required this.mime,
+    required this.mine,
+  });
+
+  final String base64Data;
+  final String mime;
+  final bool mine;
+
+  @override
+  State<_VideoNoteBubble> createState() => _VideoNoteBubbleState();
+}
+
+class _VideoNoteBubbleState extends State<_VideoNoteBubble>
+    with TickerProviderStateMixin {
+  static const double _size = 118;
+  VideoPlayerController? _controller;
+  late final AnimationController _ripple = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1600),
+  )..repeat();
+  Timer? _repaint;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.base64Data.isEmpty) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      return;
+    }
+    try {
+      final controller = await controllerFromBase64(widget.base64Data, widget.mime);
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      controller.setLooping(true);
+      setState(() {
+        _controller = controller;
+        _loading = false;
+      });
+      await controller.play();
+      _repaint = Timer.periodic(
+        const Duration(milliseconds: 120),
+        (_) => setState(() {}),
+      );
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _repaint?.cancel();
+    _ripple.dispose();
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    final controller = _controller;
+    if (controller == null) return;
+    if (controller.value.isPlaying) {
+      await controller.pause();
+    } else {
+      await controller.play();
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final controller = _controller;
+    final playing = controller?.value.isPlaying ?? false;
+
+    final progress = (controller != null &&
+            controller.value.duration > Duration.zero)
+        ? (controller.value.position.inMilliseconds /
+                controller.value.duration.inMilliseconds)
+            .clamp(0.0, 1.0)
+        : 0.0;
+
+    final accent = widget.mine ? palette.accent : palette.accentSoft;
+
+    return SizedBox(
+      width: _size + 18,
+      height: _size + 18,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Emanating ripple ring (only while playing).
+          if (playing)
+            AnimatedBuilder(
+              animation: _ripple,
+              builder: (context, _) {
+                final t = _ripple.value;
+                return Transform.scale(
+                  scale: 1.0 + (t * 0.35),
+                  child: Container(
+                    width: _size,
+                    height: _size,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: accent.withValues(alpha: (1.0 - t) * 0.6),
+                        width: 2.5,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          // The circular video itself.
+          InkWell(
+            onTap: _toggle,
+            customBorder: const CircleBorder(),
+            child: Container(
+              width: _size,
+              height: _size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: palette.incomingBubble,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.22),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: _buildContent(context, palette),
+            ),
+          ),
+          // Progress arc tracing the ring.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _ProgressRingPainter(
+                  progress: progress,
+                  color: accent,
+                  trackColor: Colors.white.withValues(alpha: 0.18),
+                ),
+              ),
+            ),
+          ),
+          if (!playing && controller != null)
+            Icon(
+              Icons.play_arrow_rounded,
+              color: Colors.white.withValues(alpha: 0.92),
+              size: 40,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent(BuildContext context, CoralinkPalette palette) {
+    if (_loading) {
+      return const Center(
+        child: SizedBox(
+          width: 26,
+          height: 26,
+          child: CircularProgressIndicator(strokeWidth: 2.4),
+        ),
+      );
+    }
+    if (_failed || _controller == null) {
+      return Icon(Icons.videocam_off_rounded, color: palette.textMuted, size: 34);
+    }
+    final value = _controller!.value;
+    if (!value.isInitialized) return const SizedBox.shrink();
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: value.size.width,
+          height: value.size.height,
+          child: VideoPlayer(_controller!),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProgressRingPainter extends CustomPainter {
+  const _ProgressRingPainter({
+    required this.progress,
+    required this.color,
+    required this.trackColor,
+  });
+
+  final double progress;
+  final Color color;
+  final Color trackColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2 - 6;
+    final track = Paint()
+      ..color = trackColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final arc = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawCircle(center, radius, track);
+    if (progress > 0) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -math.pi / 2,
+        2 * math.pi * progress,
+        false,
+        arc,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ProgressRingPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.color != color ||
+      oldDelegate.trackColor != trackColor;
 }

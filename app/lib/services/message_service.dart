@@ -79,7 +79,10 @@ class MessageService {
   String? activeChatId;
   final Set<String> _inFlight = {};
   final int _maxRawImageBytes = 340 * 1024;
-  final int _maxRawFileBytes = 8 * 1024 * 1024;
+  // Stays under the relay's decoded-ciphertext ceiling (9 MB) once the base64
+  // envelope (~4/3 of raw) is accounted for, so an accepted send never fails
+  // silently on the server.
+  final int _maxRawFileBytes = 6 * 1024 * 1024;
 
   Stream<Message> get messageUpdates => _messageUpdates.stream;
   Stream<IncomingEvent> get incoming => _incoming.stream;
@@ -164,6 +167,20 @@ class MessageService {
       return false;
     }
     final type = envelope['type'] as String? ?? 'text';
+    if (type == 'groupMeta') {
+      final existing = await store.getChat(groupId);
+      if (existing != null) {
+        final title = envelope['title'] as String?;
+        final avatar = envelope['avatar'] as String?;
+        final memberCount = envelope['memberCount'];
+        await store.upsertChat(existing.copyWith(
+          peerName: title ?? existing.peerName,
+          peerAvatar: avatar ?? existing.peerAvatar,
+          memberCount: memberCount is int ? memberCount : existing.memberCount,
+        ));
+      }
+      return true;
+    }
     final image = envelope['image'] as String?;
     final fileData = envelope['data'] as String?;
     final meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
@@ -177,8 +194,13 @@ class MessageService {
                 ? MessageKind.audio
                 : type == 'video'
                     ? MessageKind.video
-                    : MessageKind.text;
-    final hasData = type == 'file' || type == 'audio' || type == 'video';
+                    : type == 'video_note'
+                        ? MessageKind.videoNote
+                        : MessageKind.text;
+    final hasData = type == 'file' ||
+        type == 'audio' ||
+        type == 'video' ||
+        type == 'video_note';
     final message = Message(
       id: id,
       chatId: groupId,
@@ -199,7 +221,9 @@ class MessageService {
                 ? 'Голосовое'
                 : messageKind == MessageKind.video
                     ? 'Видео'
-                    : text;
+                    : messageKind == MessageKind.videoNote
+                        ? 'Видеокружок'
+                        : text;
     await store.touchChat(groupId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) {
       await store.markChatRead(groupId);
@@ -261,6 +285,27 @@ class MessageService {
         peerAvatar: group.avatar,
         memberCount: group.memberCount,
       ));
+    }
+    // Mirror the change to every other member in real time: a symmetric group
+    // control envelope carries the new title/avatar so their chat row updates
+    // without re-opening or re-fetching the group.
+    try {
+      await _sendEnvelope(
+        chatId: groupId,
+        kind: MessageKind.text,
+        preview: null,
+        control: true,
+        envelope: {
+          'v': 1,
+          'type': 'groupMeta',
+          'title': group.title,
+          'avatar': group.avatar,
+          'memberCount': group.memberCount,
+          'sentAt': DateTime.now().millisecondsSinceEpoch,
+        },
+      );
+    } catch (error) {
+      Log.e('group.meta', error);
     }
     return group;
   }
@@ -475,6 +520,38 @@ class MessageService {
     );
   }
 
+  Future<Message> sendVideoNote(
+    String chatId, {
+    required String base64Data,
+    required String mime,
+    required int size,
+    required int durationMs,
+  }) async {
+    if (size > _maxRawFileBytes) {
+      throw ArgumentError('file_too_large');
+    }
+    return _sendEnvelope(
+      chatId: chatId,
+      kind: MessageKind.videoNote,
+      preview: 'Видеокружок',
+      meta: {
+        'mime': mime,
+        'name': 'note',
+        'size': size,
+        'durationMs': durationMs,
+        'data': base64Data,
+      },
+      envelope: {
+        'v': 1,
+        'type': 'video_note',
+        'data': base64Data,
+        'meta': {'mime': mime, 'size': size, 'durationMs': durationMs},
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
   Future<void> sendReaction(String chatId, String messageId, String emoji) async {
     final target = await store.getMessage(messageId);
     if (target == null) return;
@@ -570,6 +647,13 @@ class MessageService {
           incrementUnread: false,
         );
       }
+      // Attachment bytes ride inside the encrypted envelope, never the wire
+      // meta: relay meta is size-capped server-side, so a base64 payload there
+      // would reject the send and strand the recipient. The recipient rebuilds
+      // meta['data'] from the decrypted envelope.
+      final wireMeta = meta.containsKey('data')
+          ? (<String, dynamic>{...meta}..remove('data'))
+          : meta;
       final wireKind = control ? 'control' : messageKindToWire(kind);
       final payload = {
         'id': id,
@@ -577,11 +661,11 @@ class MessageService {
         'group': isGroup,
         'ciphertext': ciphertext,
         'kind': wireKind,
-        'meta': meta,
+        'meta': wireMeta,
         'createdAt': createdAt.millisecondsSinceEpoch,
       };
       if (realtime.isConnected) {
-        _dispatchSend(isGroup, id, chatId, ciphertext, wireKind, meta, createdAt);
+        _dispatchSend(isGroup, id, chatId, ciphertext, wireKind, wireMeta, createdAt);
         message = message.copyWith(status: MessageStatus.sent);
         await store.updateMessageStatus(id, MessageStatus.sent);
       } else {
@@ -892,10 +976,18 @@ class MessageService {
         try {
           final group = await api.groupDetail(groupId);
           final existing = await store.getChat(groupId);
-          await store.upsertChat(
-            (existing ?? Chat.group(id: group.id, title: group.title, avatar: group.avatar))
-                .copyWith(memberCount: group.members.length),
-          );
+          final base = existing ??
+              Chat.group(
+                id: group.id,
+                title: group.title,
+                avatar: group.avatar,
+                memberCount: group.members.length,
+              );
+          await store.upsertChat(base.copyWith(
+            peerName: group.title,
+            peerAvatar: group.avatar,
+            memberCount: group.members.length,
+          ));
         } catch (error) {
           Log.e('group.key', error);
         }
@@ -918,8 +1010,13 @@ class MessageService {
                 ? MessageKind.audio
                 : type == 'video'
                     ? MessageKind.video
-                    : MessageKind.text;
-    final hasData = type == 'file' || type == 'audio' || type == 'video';
+                    : type == 'video_note'
+                        ? MessageKind.videoNote
+                        : MessageKind.text;
+    final hasData = type == 'file' ||
+        type == 'audio' ||
+        type == 'video' ||
+        type == 'video_note';
     final message = Message(
       id: id,
       chatId: senderId,
@@ -940,7 +1037,9 @@ class MessageService {
                 ? 'Голосовое'
                 : kind == MessageKind.video
                     ? 'Видео'
-                    : text;
+                    : kind == MessageKind.videoNote
+                        ? 'Видеокружок'
+                        : text;
     await store.touchChat(senderId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) await store.markChatRead(senderId);
     if (ack && viaRelay) {
@@ -1019,21 +1118,29 @@ class MessageService {
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       };
       wireKind = 'image';
-    } else if (message.kind == MessageKind.file) {
+    } else if (message.isFile ||
+        message.isAudio ||
+        message.isVideo ||
+        message.isVideoNote) {
+      final type = messageKindToWire(message.kind);
       final data = message.meta['data'];
+      final meta = <String, dynamic>{
+        'mime': message.meta['mime'],
+        'size': message.meta['size'],
+        if (type == 'file' || type == 'video') 'name': message.meta['name'],
+        if (type == 'audio' ||
+            type == 'video' ||
+            type == 'video_note') 'durationMs': message.meta['durationMs'],
+      };
       envelope = {
         'v': 1,
-        'type': 'file',
+        'type': type,
         'data': data,
-        'meta': {
-          'mime': message.meta['mime'],
-          'name': message.meta['name'],
-          'size': message.meta['size'],
-        },
+        'meta': meta,
         'text': '',
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       };
-      wireKind = 'file';
+      wireKind = type;
     } else {
       envelope = {
         'v': 1,
@@ -1045,12 +1152,15 @@ class MessageService {
     }
     final ciphertext = await signal.encrypt(message.chatId, envelope);
     await store.upsertMessage(message.copyWith(status: MessageStatus.sending));
+    final retryMeta = message.meta.containsKey('data')
+        ? (<String, dynamic>{...message.meta}..remove('data'))
+        : message.meta;
     realtime.sendMessage(
       id: message.id,
       to: message.chatId,
       ciphertext: ciphertext,
       kind: wireKind,
-      meta: message.meta,
+      meta: retryMeta,
       createdAt: message.createdAt,
     );
     await store.updateMessageStatus(message.id, MessageStatus.sent);

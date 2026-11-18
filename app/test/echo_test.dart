@@ -70,4 +70,23 @@ void main() {
     expect(restored.reactions['💧'], ['bob']);
     expect(restored.imageBase64, 'AAAA');
   });
+
+  test('video note kind maps to wire and back', () {
+    expect(messageKindToWire(MessageKind.videoNote), 'video_note');
+    expect(messageKindFromWire('video_note'), MessageKind.videoNote);
+
+    final message = Message(
+      id: 'n1',
+      chatId: 'bob',
+      senderId: 'alice',
+      kind: MessageKind.videoNote,
+      status: MessageStatus.read,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
+      meta: const {'mime': 'video/mp4', 'data': 'AAAA', 'size': 123},
+    );
+    final restored = Message.fromRow(message.toRow());
+    expect(restored.kind, MessageKind.videoNote);
+    expect(restored.isVideoNote, true);
+    expect(restored.meta['data'], 'AAAA');
+  });
 }

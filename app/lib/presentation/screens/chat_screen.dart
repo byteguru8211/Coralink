@@ -24,7 +24,7 @@ import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
 import 'call_screen.dart';
 
-enum _Attach { gallery, camera, file, video }
+enum _Attach { gallery, camera, file, video, videoNote }
 
 enum _AvatarChoice { gallery, camera, remove }
 
@@ -605,6 +605,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               title: strings.get('videoMessage'),
               onTap: () => Navigator.pop(context, _Attach.video),
             ),
+            if (mobile)
+              SettingsTile(
+                icon: Icons.crop_rounded,
+                title: strings.get('videoNote'),
+                onTap: () => Navigator.pop(context, _Attach.videoNote),
+              ),
             const SizedBox(height: 8),
           ],
         ),
@@ -619,6 +625,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         await _pickFile(strings);
       case _Attach.video:
         await _pickVideo(strings);
+      case _Attach.videoNote:
+        await _recordVideoNote(strings);
       case null:
         break;
     }
@@ -661,7 +669,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (files.isEmpty) return;
       final picked = files.single;
       final bytes = await picked.readAsBytes();
-      if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+      if (bytes.lengthInBytes > 6 * 1024 * 1024) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(strings.get('fileTooLarge'))),
@@ -709,7 +717,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (files.isEmpty) return;
       final picked = files.single;
       final bytes = await picked.readAsBytes();
-      if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+      if (bytes.lengthInBytes > 6 * 1024 * 1024) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(strings.get('fileTooLarge'))),
@@ -724,6 +732,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             mime,
             picked.name,
             bytes.lengthInBytes,
+          );
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
+  }
+
+  // Captures a short front-facing clip for a circular video note. Kept brief
+  // and low-res by the native camera, and re-checked against the relay cap.
+  Future<void> _recordVideoNote(AppStrings strings) async {
+    try {
+      final file = await ImagePicker().pickVideo(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front,
+        maxDuration: const Duration(seconds: 12),
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (bytes.lengthInBytes > 6 * 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.get('fileTooLarge'))),
+        );
+        return;
+      }
+      final mime = file.name.endsWith('.webm')
+          ? 'video/webm'
+          : (lookupMimeType(file.name) ?? 'video/mp4');
+      await ref.read(messagesProvider(widget.chatId).notifier).sendVideoNote(
+            base64Encode(bytes),
+            mime,
+            bytes.lengthInBytes,
+            0,
           );
       _scrollToBottom();
     } catch (error) {

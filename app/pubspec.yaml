@@ -36,6 +36,7 @@ dependencies:
   collection: ^1.19.1
   file_picker: ^13.4.0
   record: ^7.2.0
+  video_player: ^2.11.1
   flutter_foreground_task: ^11.0.3
 
 dev_dependencies:

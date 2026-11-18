@@ -456,3 +456,71 @@ test(
     await ws.close();
   },
 );
+
+test(
+  'oversized meta is rejected so attachment bytes never ride the wire meta',
+  { timeout: TEST_TIMEOUT },
+  async (t) => {
+    const h = await createHarness(t);
+    const { alice, bob, aliceWs, bobWs } = await connectPair(
+      h,
+      '79992000111',
+      '79992000112',
+    );
+
+    aliceWs.send({
+      type: 'message',
+      id: randomUuid(),
+      to: bob.user.id,
+      ciphertext: base64('file-cipher'),
+      kind: 'file',
+      meta: { data: 'A'.repeat(20 * 1024) },
+    });
+    const error = await aliceWs.waitFor('error');
+    assert.equal(error.code, 'invalid_event');
+    assert.equal(bobWs.events.find((e) => e.type === 'message'), undefined);
+
+    await aliceWs.close();
+    await bobWs.close();
+  },
+);
+
+test(
+  'file-kind message with small meta relays its ciphertext to the recipient',
+  { timeout: TEST_TIMEOUT },
+  async (t) => {
+    const h = await createHarness(t);
+    const { alice, bob, aliceWs, bobWs } = await connectPair(
+      h,
+      '79992000121',
+      '79992000122',
+    );
+    // ~50 KB of ciphertext (the encrypted envelope carries the payload),
+    // with only descriptor fields in the wire meta.
+    const ciphertext = base64('x'.repeat(50 * 1024));
+    const messageId = randomUuid();
+
+    aliceWs.send({
+      type: 'message',
+      id: messageId,
+      to: bob.user.id,
+      ciphertext,
+      kind: 'file',
+      meta: { mime: 'application/pdf', name: 'doc.pdf', size: 50 * 1024 },
+    });
+
+    const delivery = await bobWs.waitFor(
+      (e) => e.type === 'message' && e.message.id === messageId,
+    );
+    assert.equal(delivery.message.kind, 'file');
+    assert.equal(delivery.message.ciphertext, ciphertext);
+    assert.deepEqual(delivery.message.meta, {
+      mime: 'application/pdf',
+      name: 'doc.pdf',
+      size: 50 * 1024,
+    });
+
+    await aliceWs.close();
+    await bobWs.close();
+  },
+);

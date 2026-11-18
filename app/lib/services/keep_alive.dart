@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-/// Keeps the app process alive while backgrounded so the WebSocket stays
-/// connected and incoming messages can raise local notifications without
+/// Keeps the app process and radios alive while backgrounded so the WebSocket
+/// stays connected and incoming messages can raise local notifications without
 /// requiring Firebase push. No-op on web and non-Android platforms.
 @pragma('vm:entry-point')
 void _keepAliveCallback() {
@@ -23,9 +23,39 @@ class _KeepAliveHandler extends TaskHandler {
 bool get _supported =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+bool _configured = false;
+
+void _configure() {
+  if (_configured) return;
+  FlutterForegroundTask.init(
+    androidNotificationOptions: AndroidNotificationOptions(
+      channelId: 'coralink_keep_alive',
+      channelName: 'Coralink · background',
+      channelDescription: 'Keeps Coralink receiving messages while closed',
+      channelImportance: NotificationChannelImportance.LOW,
+      priority: NotificationPriority.LOW,
+    ),
+    iosNotificationOptions: const IOSNotificationOptions(
+      showNotification: false,
+      playSound: false,
+    ),
+    foregroundTaskOptions: ForegroundTaskOptions(
+      eventAction: ForegroundTaskEventAction.repeat(30000),
+      // Holding the CPU and Wi-Fi radio awake is what lets the WebSocket
+      // heartbeat and reconnect timers keep firing under Doze; without it the
+      // socket is dropped and no notifications arrive while minimized.
+      allowWakeLock: true,
+      allowWifiLock: true,
+      autoRunOnBoot: false,
+    ),
+  );
+  _configured = true;
+}
+
 Future<void> startKeepAlive() async {
   if (!_supported) return;
   try {
+    _configure();
     if (await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.startService(
       serviceId: 256,

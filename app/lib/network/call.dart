@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../core/config.dart';
 import '../core/log.dart';
@@ -40,6 +41,24 @@ class CallService {
   MediaStream? _local;
   String? _pendingOffer;
   String? _selfId;
+
+  // ICE candidates can arrive before the remote description (e.g. the caller's
+  // trickle reaches the callee while it is still ringing and has no peer
+  // connection). Buffer them and flush once a remote description is set,
+  // otherwise the negotiation stalls and the call never connects.
+  bool _remoteDescriptionSet = false;
+  final List<RTCIceCandidate> _pendingCandidates = <RTCIceCandidate>[];
+
+  void _markRemoteSet() {
+    _remoteDescriptionSet = true;
+    final pc = _pc;
+    if (pc == null) return;
+    final queued = List<RTCIceCandidate>.from(_pendingCandidates);
+    _pendingCandidates.clear();
+    for (final candidate in queued) {
+      unawaited(pc.addCandidate(candidate));
+    }
+  }
 
   void identify(String userId) => _selfId = userId;
 
@@ -91,6 +110,7 @@ class CallService {
       await _setupMedia();
       await _pc!
           .setRemoteDescription(RTCSessionDescription(_pendingOffer, 'offer'));
+      _markRemoteSet();
       _pendingOffer = null;
       final answer = await _pc!.createAnswer();
       await _pc!.setLocalDescription(answer);
@@ -133,6 +153,8 @@ class CallService {
       await remoteRenderer.initialize();
       _renderersReady = true;
     }
+    _remoteDescriptionSet = false;
+    _pendingCandidates.clear();
     _pc = await createPeerConnection(_iceServers);
     _pc!.onIceCandidate = (candidate) {
       try {
@@ -164,6 +186,18 @@ class CallService {
         _setStatus(CallStatus.active);
       }
     };
+    // Ask the OS for capture permission before getUserMedia. On Android this
+    // triggers the runtime prompt; on desktop/unsupported platforms the call
+    // is best-effort and never blocks the negotiation.
+    try {
+      final toRequest = <Permission>[
+        Permission.microphone,
+        if (video) Permission.camera,
+      ];
+      await toRequest.request();
+    } catch (error) {
+      Log.e('call.permission', error);
+    }
     _local = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': video
@@ -204,16 +238,22 @@ class CallService {
           if (_pc != null && sdp is String) {
             await _pc!
                 .setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+            _markRemoteSet();
             _setStatus(CallStatus.active);
           }
         case 'ice':
           final candidate = data['candidate'];
-          if (_pc != null && candidate is String) {
-            await _pc!.addCandidate(RTCIceCandidate(
+          if (candidate is String) {
+            final ice = RTCIceCandidate(
               candidate,
               data['sdpMid'] as String?,
               (data['sdpMLineIndex'] as num?)?.toInt(),
-            ));
+            );
+            if (_pc != null && _remoteDescriptionSet) {
+              await _pc!.addCandidate(ice);
+            } else {
+              _pendingCandidates.add(ice);
+            }
           }
         case 'decline':
         case 'busy':
@@ -246,6 +286,8 @@ class CallService {
     } catch (_) {}
     _local = null;
     _pendingOffer = null;
+    _remoteDescriptionSet = false;
+    _pendingCandidates.clear();
     final wasActive = inCall;
     peerId = null;
     video = false;

@@ -43,7 +43,13 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   }
 
   Future<void> _onIncoming(IncomingEvent event) async {
-    if (!mounted || event.isActiveChat) return;
+    if (!mounted) return;
+    // Suppress only when the user is actively viewing that chat in the
+    // foreground. Once the app is backgrounded, the last-open chat should still
+    // raise notifications, matching messenger expectations.
+    final resumed =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    if (event.isActiveChat && resumed) return;
     final client = ref.read(clientProvider);
     final settings = ref.read(settingsProvider);
     final chat = await client.store.getChat(event.message.chatId);
