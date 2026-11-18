@@ -7,30 +7,39 @@ Coralink состоит из двух самостоятельных прило�
 - **Клиент** — Flutter (Android / Windows / Web; iOS-каркас готов к сборке на macOS).
 - **Сервер** — Node.js 24, HTTP API + WebSocket, встроенный `node:sqlite`.
 
-Сервер выполняет роль **signaling + relay**: он помогает устройствам найти друг друга, хранит публичные ключи и передаёт непрозрачный шифротекст. Открытый текст сообщений не покидает устройство.
+Сервер выполняет роль **signaling + relay**: он помогает устройствам найти друг
+друга, хранит публичные ключи, передаёт непрозрачный шифротекст и ретранслирует
+signaling звонков. Открытый текст сообщений не покидает устройство.
 
 ```
-Flutter-клиент A ──WebRTC DataChannel──► Flutter-клиент B
-        │                                  ▲
-        │ WebSocket + HTTPS                │
-        ▼                                  │
-┌─────────────────────────────────────────────────────┐
-│ Node.js: auth · keys · signaling · relay · presence  │
-│ SQLite: users, prekeys, contacts, queue, push tokens │
-└─────────────────────────────────────────────────────┘
+Flutter-клиент A ──WebSocket/HTTPS (relay сообщений)──► Node.js ──► Flutter-клиент B
+        │                                                        ▲
+        └────WebRTC (медиа звонка напрямую, поверх tailnet)──────┘
+                     signaling (offer/answer/ICE) идёт через сервер
+
+┌──────────────────────────────────────────────────────────────────┐
+│ Node.js: auth · keys · groups · relay · call-signaling · presence │
+│ SQLite: users, prekeys, contacts, queue, groups, key_backup, push │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+> Примечание: прямая доставка через **WebRTC DataChannel отключена**. Bundled
+> libwebrtc форсирует Unified Plan и обрывает процесс на `createDataChannel`
+> (`Check failed: !IsUnifiedPlan()`), поэтому вся доставка сообщений идёт через
+> WebSocket-relay. WebRTC используется только для медиа звонков (аудио/видео).
 
 ## 2. Слои клиента
 
 ```
 presentation/   экраны, виджеты, Riverpod-контроллеры
       │
-domain/         сущности (User, Chat, Message), правила
+domain/         сущности (User, Chat, Message, Group), правила
       │
-services/       MessageService, EchoSearch, Audio, Notifications, Export
+services/       MessageService, EchoSearch, Audio, Notifications, Export,
+                VoiceRecorder, KeepAlive
       │
-network/        RealtimeService (WS), P2PManager (WebRTC)
-security/       SignalService, PersistentSignalStore
+network/        RealtimeService (WS-relay), CallService (WebRTC), P2PManager (отключён)
+security/       SignalService, PersistentSignalStore, GroupCrypto, KeyBackup
       │
 data/           ApiClient, LocalStore (SQLCipher/SQLite/memory), SecureStore
 ```
@@ -84,37 +93,71 @@ base64( [typeByte][libsignal ciphertext] )
 ```json
 {"v":1,"type":"text","text":"Привет","sentAt":1730000000000}
 {"v":1,"type":"image","image":"<base64>","meta":{"mime":"image/jpeg","name":"photo.jpg"}}
+{"v":1,"type":"file","data":"<base64>","meta":{"mime":"application/pdf","name":"doc.pdf","size":12345}}
+{"v":1,"type":"audio","data":"<base64>","meta":{"mime":"audio/mp4a-latm","size":...,"durationMs":...}}
+{"v":1,"type":"video","data":"<base64>","meta":{"mime":"video/mp4","name":"clip.mp4","size":...}}
+{"v":1,"type":"video_note","data":"<base64>","meta":{"mime":"video/mp4","size":...,"durationMs":...}}
 {"v":1,"type":"reaction","targetId":"<uuid>","reaction":"🌿"}
 {"v":1,"type":"delete","targetId":"<uuid>"}
+{"v":1,"type":"groupKey","groupId":"<uuid>","key":"<base64 AES-GCM key>"}
+{"v":1,"type":"groupMeta","title":"...","avatar":"...","memberCount":N}
 ```
 
-Сервер видит только base64-шифротекст и технический `kind` (`text` / `image` / `control`).
+Байты вложений лежат **внутри шифротекста** (в `data`/`image` envelope), а не в
+служебном `meta` поверх канала: серверный relay ограничивает `meta` 16 КБ, и
+большой base64 в `meta` приводил к отклонению доставки получателю.
+
+Сервер видит только base64-шифротекст и технический `kind` (`text` / `image` /
+`file` / `audio` / `video` / `video_note` / `control`).
+
+### 3.1. Групповое E2EE
+
+Каждая группа имеет симметричный 256-битный AES-GCM ключ (`GroupCrypto`). Ключ
+генерирует создатель и рассылает участникам зашифрованным сообщением `groupKey`
+по их 1-на-1 Signal-каналам; ключ хранится в secure storage под `group.key.<id>`.
+Групповые сообщения шифруются этим ключом и ретранслируются сервером всем
+участникам. Смена названия/аватара рассылается как `groupMeta`, чтобы у всех
+обновлялось в реальном времени.
+
+### 3.2. Бэкап ключей (мультидевайс)
+
+`KeyBackup` сериализует всё состояние Signal (identity, prekeys, sessions) и все
+ключи групп, шифрует AES-GCM-ключом из PBKDF2-HMAC-SHA256 (пароль + соль, 200k
+итераций) и загружает на сервер как непрозрачный блоб. При входе на новом
+устройстве блоб скачивается и расшифровывается тем же паролем — устройство
+восстанавливает существующую идентичность вместо создания новой.
 
 ## 4. Доставка сообщений
 
-Порядок отправки:
+Порядок отправки (через relay; прямые DataChannel отключены):
 
-1. Сообщение шифруется, сохраняется локально со статусом `sending`.
-2. Отправляется через WebSocket на сервер (сервер ставит в очередь получателя).
-3. Параллельно, если есть открытый DataChannel, копия уходит напрямую peer-у.
-4. Получатель:
+1. Сообщение шифруется и сохраняется локально со статусом `sending`.
+2. Отправляется через WebSocket на сервер (`message` для 1-на-1, `group.send` для
+   групп). Сервер кладёт его в очередь получателя и доставляет, если тот онлайн.
+3. Получатель:
    - дедуплицирует по `id`;
-   - расшифровывает;
+   - расшифровывает (Signal или AES-GCM для групп);
    - сохраняет;
-   - отправляет ack на сервер (`message.ack`) и read-receipt, если чат открыт;
-   - отвечает ack по DataChannel, если сообщение пришло по P2P.
-5. Сервер помечает сообщение доставленным и уведомляет отправителя.
-6. Если сокет недоступен, сообщение кладётся в локальный `outbox` и повторяется после реконнекта. Сервер дедуплицирует по `id`.
+   - подтверждает (`message.ack` / ack групповых) и отправляет read-receipt, если чат открыт.
+4. Сервер помечает сообщение доставленным и уведомляет отправителя.
+5. Если сокет недоступен, сообщение кладётся в локальный `outbox` и повторяется
+   после реконнекта. Сервер дедуплицирует по `id`.
 
-Такой гибрид даёт скорость P2P и надёжность серверной очереди: P2P-копия может прийти раньше, relay-копия гарантирует доставку и корректные статусы.
+Неудачная расшифровка (например, пришло раньше, чем создан session) не теряет
+сообщение: сохраняется шифротекст и повторная попытка после установления сессии.
 
-### 4.1. WebRTC
+### 4.1. Звонки (WebRTC)
 
-- Инициатор соединения — пользователь с лексикографически меньшим `userId` (детерминированно, без гонок).
-- Один `RTCPeerConnection` и один DataChannel `coralink-data` на чат.
-- SDP и ICE передаются через сервер (`signal`-события), сами данные — напрямую.
-- STUN по умолчанию `stun:stun.l.google.com:19302`; TURN задаётся через `--dart-define`.
-- При разрыве/смене сети соединение пересоздаётся; сообщения продолжают идти через relay.
+- `CallService` поднимает `RTCPeerConnection` для аудио/видео звонка; signaling
+  (offer/answer/ICE) идёт через сервер событием `call`.
+- Медиа идёт напрямую между устройствами поверх tailnet (host-кандидаты), TURN не
+  обязателен; STUN опционален.
+- ICE-кандидаты буферизуются до установки remote description (иначе кандидаты,
+  пришедшие пока вызываемый «звонит», терялись бы и рукопожатие не завершалось).
+- Разрешения на микрофон/камеру запрашиваются перед `getUserMedia`; ошибки
+  signaling не должны ронять isolate (обёрнуты в try/catch).
+- Сброс определяется и по явному `call/hangup`, и по состоянию соединения
+  (`disconnected`), чтобы висящий звонок завершался.
 
 ### 4.2. Присутствие
 
@@ -137,14 +180,18 @@ SQLCipher, ключ 256 бит генерируется CSPRNG и хранитс
 Схема:
 
 ```sql
-users(id, phone, name, about, avatar_color, last_seen, presence)
-chats(id, peer_id, peer_name, ..., last_message_text, last_message_at,
-      unread_count, archived, pinned, muted, updated_at)
+users(id, phone, username, password_hash, name, about, avatar, avatar_color, last_seen, presence, presence_visibility)
+chats(id, peer_id, peer_name, peer_avatar, peer_avatar_color, is_group, member_count,
+      last_message_text, last_message_at, unread_count, archived, pinned, muted, updated_at)
 messages(id, chat_id, sender_id, text, kind, status, created_at,
          delivered_at, read_at, meta, image_b64, reactions, archived, deleted)
 contacts(id, phone, name, about, avatar_color, last_seen, presence, added_at)
 outbox(id, chat_id, payload, created_at, attempts)
 ```
+
+На сервере (`node:sqlite`) дополнительно: `prekeys`, `auth_codes`, `groups`,
+`group_members`, `group_messages`, `group_message_receipts`, `push_tokens`,
+`key_backup`.
 
 Открытый текст в БД — нормальное решение: история должна быть доступна офлайн. На мобильных она защищена шифрованием всей БД.
 
@@ -190,11 +237,17 @@ outbox(id, chat_id, payload, created_at, attempts)
 | Возможность | Android | Windows | Web | iOS |
 |---|---|---|---|---|
 | UI, темы, анимации | ✅ | ✅ | ✅ | ✅ (код) |
-| E2EE | ✅ | ✅ | ✅ | ✅ |
-| WebRTC | ✅ | ✅ | ✅ | ✅ |
+| E2EE 1-на-1 и группы | ✅ | ✅ | ✅ | ✅ |
+| Сообщения: файл/аудио/видео/видеокружок | ✅ | ✅ | частично | ✅ (код) |
+| Звонки (WebRTC) | ✅ | ✅ | ✅ | ✅ (код) |
+| Мультидевайс (бэкап ключей) | ✅ | ✅ | ✅ | ✅ (код) |
 | Постоянная история | SQLCipher | SQLite | память | SQLCipher |
-| Уведомления | ✅ | — | — | ✅ |
+| Уведомления | ✅ (и фоновые) | ✅ | — | ✅ |
 | Звуки | ✅ | ✅ | ✅ | ✅ |
 | Экспорт чатов | ✅ | ✅ | — | ✅ |
+
+Видеокружки пишутся с камеры на мобильных; воспроизведение на web/desktop —
+через `video_player`. На Windows у `video_player` нет нативной реализации,
+присланный с телефона кружок показывается заглушкой (запись — только на телефоне).
 
 iOS не собирался в этой среде (нет macOS), но платформа сгенерирована, разрешения и минимальная версия 14.0 настроены.

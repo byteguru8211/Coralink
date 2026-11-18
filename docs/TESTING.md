@@ -7,7 +7,7 @@ cd server
 npm test
 ```
 
-29 тестов (`node:test`), реальные HTTP-запросы и WebSocket-соединения на временном порту и временной БД:
+47 тестов (`node:test`), реальные HTTP-запросы и WebSocket-соединения на временном порту и временной БД:
 
 - auth: dev-код, verify, JWT, неверный код, блокировка попыток, обязательная авторизация;
 - профиль: валидация имени/about/цвета;
@@ -25,11 +25,12 @@ cd app
 flutter test
 ```
 
-11 тестов:
+14 тестов:
 
 - `test/widget_test.dart` — валидация и маскирование телефона, инициалы;
-- `test/echo_test.dart` — синонимы, опечатки, стоп-слова, round-trip модели сообщения;
-- `test/signal_test.dart` — реальный обмен X3DH/Double Ratchet между двумя хранилищами, расходование prekey, сериализация состояния.
+- `test/echo_test.dart` — синонимы, опечатки, стоп-слова, round-trip модели сообщения, маппинг `video_note`;
+- `test/signal_test.dart` — реальный обмен X3DH/Double Ratchet между двумя хранилищами, расходование prekey, сериализация состояния;
+- `test/key_backup_test.dart` — round-trip зашифрованного бэкапа ключей и отказ на неверном пароле.
 
 `flutter analyze` должен завершаться без ошибок (допустимы info-подсказки линтера).
 
@@ -52,6 +53,11 @@ node src/index.js
 cd app
 flutter test integration_test/e2e_test.dart -d windows
 ```
+
+> Офлайн-среда: `integration_test` тянет androidx.test из Google Maven. Если
+> Maven недоступен, этот E2E не соберётся — тогда ограничьтесь `flutter test`
+> (юнит/виджет) и `node --test` (сервер), а на время сборки release APK временно
+> уберите `integration_test` из `pubspec.yaml`.
 
 Тест:
 
