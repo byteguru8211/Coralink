@@ -63,7 +63,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       });
     }
 
-    final isVideo = _call.video;
+    final isVideo = _call.video && _call.renderersReady;
     final connected = status == CallStatus.active;
     final name = _peerName();
 

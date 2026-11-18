@@ -13,7 +13,10 @@ enum CallStatus { idle, outgoing, incoming, active, ended }
 /// required (STUN is used opportunistically).
 class CallService {
   CallService(this._config, this._realtime) {
-    _subscription = _realtime.events.listen(_onEvent);
+    _subscription = _realtime.events.listen(
+      _onEvent,
+      onError: (Object error) => Log.e('call.stream', error),
+    );
   }
 
   final AppConfig _config;
@@ -25,6 +28,7 @@ class CallService {
 
   final RTCVideoRenderer localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer remoteRenderer = RTCVideoRenderer();
+  bool _renderersReady = false;
 
   CallStatus status = CallStatus.idle;
   String? peerId;
@@ -43,6 +47,8 @@ class CallService {
       status == CallStatus.outgoing ||
       status == CallStatus.incoming ||
       status == CallStatus.active;
+
+  bool get renderersReady => _renderersReady;
 
   Map<String, dynamic> get _iceServers => {
         'iceServers': [
@@ -122,26 +128,37 @@ class CallService {
   }
 
   Future<void> _setupMedia() async {
-    await localRenderer.initialize();
-    await remoteRenderer.initialize();
+    if (!_renderersReady) {
+      await localRenderer.initialize();
+      await remoteRenderer.initialize();
+      _renderersReady = true;
+    }
     _pc = await createPeerConnection(_iceServers);
     _pc!.onIceCandidate = (candidate) {
-      _realtime.sendCall(peerId ?? '', {
-        'action': 'ice',
-        'candidate': candidate.candidate,
-        'sdpMid': candidate.sdpMid,
-        'sdpMLineIndex': candidate.sdpMLineIndex,
-      });
+      try {
+        _realtime.sendCall(peerId ?? '', {
+          'action': 'ice',
+          'candidate': candidate.candidate,
+          'sdpMid': candidate.sdpMid,
+          'sdpMLineIndex': candidate.sdpMLineIndex,
+        });
+      } catch (error) {
+        Log.e('call.ice', error);
+      }
     };
     _pc!.onTrack = (event) {
-      if (event.streams.isNotEmpty) {
-        remoteRenderer.srcObject = event.streams[0];
+      try {
+        if (event.streams.isNotEmpty) {
+          remoteRenderer.srcObject = event.streams[0];
+        }
+      } catch (error) {
+        Log.e('call.track', error);
       }
     };
     _pc!.onConnectionState = (state) {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
-        _teardown();
+        unawaited(_teardown());
       } else if (state ==
           RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         _setStatus(CallStatus.active);
@@ -157,44 +174,57 @@ class CallService {
     await _pc!.addStream(_local!);
   }
 
-  void _onEvent(RealtimeEvent event) async {
-    if (event.type != 'call') return;
-    final from = event.data['from'] as String?;
-    final data = (event.data['data'] as Map?)?.cast<String, dynamic>();
-    if (from == null || data == null || from == _selfId) return;
-    final action = data['action'] as String?;
+  void _onEvent(RealtimeEvent event) {
+    // Never let a signaling/media error escape: an uncaught async error in a
+    // stream callback crashes the whole app on Windows and Android.
+    unawaited(_handleCallEvent(event));
+  }
 
-    switch (action) {
-      case 'call':
-        if (inCall) {
-          _realtime.sendCall(from, {'action': 'busy'});
-          return;
-        }
-        peerId = from;
-        video = data['mode'] == 'video';
-        cameraOn = video;
-        _pendingOffer = data['sdp'] as String?;
-        _setStatus(CallStatus.incoming);
-      case 'answer':
-        await _pc?.setRemoteDescription(
-          RTCSessionDescription(data['sdp'] as String, 'answer'),
-        );
-        _setStatus(CallStatus.active);
-      case 'ice':
-        final candidate = data['candidate'] as String?;
-        if (candidate != null) {
-          await _pc?.addCandidate(RTCIceCandidate(
-            candidate,
-            data['sdpMid'] as String?,
-            (data['sdpMLineIndex'] as num?)?.toInt(),
-          ));
-        }
-      case 'decline':
-      case 'busy':
-      case 'hangup':
-        await _teardown();
-      default:
-        break;
+  Future<void> _handleCallEvent(RealtimeEvent event) async {
+    try {
+      if (event.type != 'call') return;
+      final from = event.data['from'] as String?;
+      final data = (event.data['data'] as Map?)?.cast<String, dynamic>();
+      if (from == null || data == null || from == _selfId) return;
+      final action = data['action'] as String?;
+
+      switch (action) {
+        case 'call':
+          if (inCall) {
+            _realtime.sendCall(from, {'action': 'busy'});
+            return;
+          }
+          peerId = from;
+          video = data['mode'] == 'video';
+          cameraOn = video;
+          _pendingOffer = data['sdp'] as String?;
+          _setStatus(CallStatus.incoming);
+        case 'answer':
+          final sdp = data['sdp'];
+          if (_pc != null && sdp is String) {
+            await _pc!
+                .setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+            _setStatus(CallStatus.active);
+          }
+        case 'ice':
+          final candidate = data['candidate'];
+          if (_pc != null && candidate is String) {
+            await _pc!.addCandidate(RTCIceCandidate(
+              candidate,
+              data['sdpMid'] as String?,
+              (data['sdpMLineIndex'] as num?)?.toInt(),
+            ));
+          }
+        case 'decline':
+        case 'busy':
+        case 'hangup':
+          await _teardown();
+        default:
+          break;
+      }
+    } catch (error, stack) {
+      Log.e('call.event', error, stack);
+      await _teardown();
     }
   }
 
