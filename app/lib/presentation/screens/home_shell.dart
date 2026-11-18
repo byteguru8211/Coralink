@@ -8,10 +8,12 @@ import '../../app/session.dart';
 import '../../core/app_colors.dart';
 import '../../core/utils.dart';
 import '../../data/settings_store.dart';
+import '../../network/call.dart';
 import '../../services/audio_service.dart';
 import '../../services/message_service.dart';
 import '../controllers.dart';
 import '../widgets/coral_widgets.dart';
+import 'call_screen.dart';
 import 'chats_screen.dart';
 import 'contacts_screen.dart';
 import 'settings_screen.dart';
@@ -67,6 +69,21 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final strings = ref.watch(stringsProvider);
     final unread = ref.watch(chatsProvider.select((state) => state.unread));
     final palette = context.palette;
+
+    // Surface an incoming call over whatever screen is open.
+    ref.listen<AsyncValue<CallStatus>>(callStatusProvider, (previous, next) {
+      final status = next.value;
+      final wasIncoming = previous?.value == CallStatus.incoming;
+      if (status == CallStatus.incoming && !wasIncoming) {
+        final peerId = ref.read(callProvider).peerId;
+        if (peerId != null) {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => CallScreen(peerId: peerId)),
+          );
+        }
+      }
+    });
+
     return Scaffold(
       body: CoralBackground(
         child: IndexedStack(

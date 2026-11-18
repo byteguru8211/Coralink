@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/log.dart';
 import '../data/api_client.dart';
 import '../domain/models.dart';
+import '../network/call.dart';
 import '../network/realtime.dart';
 import 'client_bundle.dart';
 import 'dependencies.dart';
@@ -264,4 +265,12 @@ final clientProvider = Provider<ClientBundle>((ref) {
 final realtimeStatusProvider = StreamProvider<RealtimeStatus>((ref) {
   final client = ref.watch(clientProvider);
   return client.realtime.statuses;
+});
+
+final callProvider = Provider<CallService>((ref) {
+  return ref.watch(clientProvider).call;
+});
+
+final callStatusProvider = StreamProvider<CallStatus>((ref) {
+  return ref.watch(callProvider).changes;
 });

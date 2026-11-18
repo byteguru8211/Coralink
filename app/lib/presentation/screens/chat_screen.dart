@@ -21,6 +21,7 @@ import '../../services/audio_service.dart';
 import '../controllers.dart';
 import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
+import 'call_screen.dart';
 
 enum _Attach { gallery, camera, file }
 
@@ -196,6 +197,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               padding: const EdgeInsets.only(right: 4),
               child: Icon(Icons.cloud_off_rounded, color: palette.coral, size: 18),
             ),
+          if (!(chat?.isGroup ?? false)) ...[
+            IconButton(
+              tooltip: strings.get('audioCall'),
+              onPressed: () => _startCall(false),
+              icon: Icon(Icons.call_rounded, color: palette.accent),
+            ),
+            IconButton(
+              tooltip: strings.get('videoCall'),
+              onPressed: () => _startCall(true),
+              icon: Icon(Icons.videocam_rounded, color: palette.accent),
+            ),
+          ],
           IconButton(
             onPressed: () => _showChatMenu(chat, strings),
             icon: const Icon(Icons.more_vert_rounded),
@@ -690,6 +703,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             const SizedBox(height: 8),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _startCall(bool withVideo) async {
+    final call = ref.read(callProvider);
+    if (call.inCall) return;
+    await call.start(widget.chatId, withVideo: withVideo);
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CallScreen(peerId: widget.chatId, initialVideo: withVideo),
       ),
     );
   }

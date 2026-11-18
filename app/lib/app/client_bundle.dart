@@ -5,6 +5,7 @@ import '../data/api_client.dart';
 import '../data/local_store.dart';
 import '../data/secure_store.dart';
 import '../domain/models.dart';
+import '../network/call.dart';
 import '../network/p2p.dart';
 import '../network/realtime.dart';
 import '../security/group_crypto.dart';
@@ -23,6 +24,7 @@ class ClientBundle {
     required this.signal,
     required this.groupCrypto,
     required this.realtime,
+    required this.call,
     required this.p2p,
     required this.messages,
     required this.echo,
@@ -35,6 +37,7 @@ class ClientBundle {
   final SignalService signal;
   final GroupCrypto groupCrypto;
   final RealtimeService realtime;
+  final CallService call;
   final P2PManager p2p;
   final MessageService messages;
   final EchoSearch echo;
@@ -57,6 +60,7 @@ class ClientBundle {
     final signal = await SignalService.load(secure: secure, api: api, userId: user.id);
     final groupCrypto = GroupCrypto(secure);
     final realtime = RealtimeService(config.wsUrl, token);
+    final call = CallService(config, realtime)..identify(user.id);
     final p2p = P2PManager(config, realtime);
     final messages = MessageService(
       store: store,
@@ -105,6 +109,7 @@ class ClientBundle {
       signal: signal,
       groupCrypto: groupCrypto,
       realtime: realtime,
+      call: call,
       p2p: p2p,
       messages: messages,
       echo: EchoSearch(store),
@@ -112,6 +117,7 @@ class ClientBundle {
   }
 
   Future<void> dispose() async {
+    await call.dispose();
     await p2p.dispose();
     await realtime.dispose();
     await messages.dispose();

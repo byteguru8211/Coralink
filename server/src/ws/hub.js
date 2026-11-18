@@ -348,6 +348,23 @@ function createHub({ db, config, logger }) {
     }
   }
 
+  function handleCall(ws, event) {
+    const user = ws.coralinkUser;
+    if (user.id === event.to) return;
+    const sent = sendToUser(event.to, {
+      type: 'call',
+      from: user.id,
+      data: event.data,
+    });
+    if (sent === 0 && event.data.action === 'call') {
+      send(ws, {
+        type: 'call',
+        from: event.to,
+        data: { action: 'busy', reason: 'offline' },
+      });
+    }
+  }
+
   function handleTyping(ws, event) {
     const user = ws.coralinkUser;
     if (!isOnline(event.to)) return;
@@ -371,6 +388,9 @@ function createHub({ db, config, logger }) {
         break;
       case 'signal':
         handleSignal(ws, event);
+        break;
+      case 'call':
+        handleCall(ws, event);
         break;
       case 'group.send':
         handleGroupSend(ws, event);

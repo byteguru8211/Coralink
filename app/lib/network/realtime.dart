@@ -139,6 +139,9 @@ class RealtimeService {
   void sendSignal(String to, Map<String, dynamic> data) =>
       sendRaw({'type': 'signal', 'to': to, 'data': data});
 
+  void sendCall(String to, Map<String, dynamic> data) =>
+      sendRaw({'type': 'call', 'to': to, 'data': data});
+
   void sendGroupMessage({
     required String id,
     required String groupId,

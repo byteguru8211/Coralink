@@ -214,6 +214,18 @@ function parseClientEvent(raw) {
         to: requireUuid(event.to, 'to'),
         data: validateSignalData(event.data),
       };
+    case 'call':
+      if (!isPlainObject(event.data)) {
+        fail('invalid_event', 'call data must be an object');
+      }
+      if (typeof event.data.action !== 'string' || event.data.action.length === 0) {
+        fail('invalid_event', 'call data.action is required');
+      }
+      return {
+        type: 'call',
+        to: requireUuid(event.to, 'to'),
+        data: event.data,
+      };
     case 'typing':
       if (typeof event.on !== 'boolean') {
         fail('invalid_event', 'on must be a boolean');
