@@ -13,6 +13,7 @@ import '../../core/utils.dart';
 import '../../domain/models.dart';
 import '../../services/video_note_media.dart';
 import 'coral_widgets.dart';
+import 'stickers.dart';
 
 class MessageBubble extends StatefulWidget {
   const MessageBubble({
@@ -68,6 +69,57 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
     final mine = message.senderId == widget.myId;
     final maxWidth = MediaQuery.sizeOf(context).width * 0.76;
     final deleted = message.deleted;
+
+    // Stickers live outside the chat bubble: they are little illustrations of
+    // their own, with the delivery drop tucked underneath.
+    if (message.isSticker && !deleted) {
+      final sticker = stickerFromId(message.meta['sticker'] as String?) ??
+          CoralSticker.wave;
+      return Align(
+        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(mine ? 56 : 14, 4, mine ? 14 : 56, 4),
+          child: GestureDetector(
+            onLongPress: widget.onLongPress,
+            child: Column(
+              crossAxisAlignment:
+                  mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: palette.surface.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(28),
+                    border: widget.highlight
+                        ? Border.all(
+                            color: palette.halo.withValues(alpha: 0.75),
+                            width: 1.4,
+                          )
+                        : null,
+                  ),
+                  child: StickerView(sticker: sticker, size: 132),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      formatClock(message.createdAt),
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: palette.textMuted.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    if (mine) ...[const SizedBox(width: 6), _StatusDrop(status: message.status)],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     final bubble = Container(
       constraints: BoxConstraints(maxWidth: maxWidth),

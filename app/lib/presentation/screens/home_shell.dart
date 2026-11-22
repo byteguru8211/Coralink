@@ -110,9 +110,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (chat?.muted == true) return;
     await ref.read(audioProvider).playCue(SoundCue.receive, settings.receiveSoundId);
     final name = chat?.peerName ?? 'Coralink';
-    final preview = event.message.isImage
-        ? (settings.localeCode == 'en' ? 'Photo' : 'Фото')
-        : event.message.text;
+    final english = settings.localeCode == 'en';
+    final preview = event.message.isSticker
+        ? (english ? 'Sticker' : 'Стикер')
+        : event.message.isImage
+            ? (english ? 'Photo' : 'Фото')
+            : event.message.text;
     if (resumed) {
       _banner(
         title: name,

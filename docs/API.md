@@ -249,7 +249,7 @@ relay WebRTC-signaling для звонков; если получатель оф
 ### Клиент → сервер
 
 ```json
-{"type":"message","id":"uuid","to":"uuid","ciphertext":"<base64>","kind":"text|image|control","meta":{},"createdAt":1730000000000}
+{"type":"message","id":"uuid","to":"uuid","ciphertext":"<base64>","kind":"text|image|file|audio|video|video_note|sticker|control","meta":{},"createdAt":1730000000000}
 {"type":"message.ack","ids":["uuid"]}
 {"type":"message.read","chatWith":"uuid","ids":["uuid"]}
 {"type":"group.send","id":"uuid","groupId":"uuid","ciphertext":"<base64>","kind":"text","meta":{},"createdAt":1730000000000}
@@ -268,6 +268,7 @@ relay WebRTC-signaling для звонков; если получатель оф
 - `meta` — ≤ 16 КБ и не содержит байтов вложения (они внутри шифротекста).
 - Отправка дубликата `id` идемпотентна.
 - `kind=control` используется для реакций и удаления; сервер считает нагрузку непрозрачной.
+- `kind=sticker` — стикер: в шифрованном конверте лежит `{"type":"sticker","meta":{"sticker":"wave"}}`; id — один из `wave`, `hug`, `moon`, `star`, `laugh`, `miss`, `yay`, `thanks`.
 - `signal`/`call` доставляются только при живом сокете получателя, иначе `peer_offline`/`busy`.
 - Тело сообщения не логируется.
 

@@ -22,6 +22,7 @@ import '../../services/voice_recorder.dart';
 import '../controllers.dart';
 import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
+import '../widgets/stickers.dart';
 import 'call_screen.dart';
 
 enum _Attach { gallery, camera, file, video, videoNote }
@@ -463,6 +464,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 onPressed: () => _showAttachments(strings),
                 icon: Icon(Icons.add_circle_outline_rounded, color: palette.accentSoft),
               ),
+            if (!_recording)
+              IconButton(
+                tooltip: strings.get('stickersTitle'),
+                onPressed: () => _showStickers(strings),
+                icon: Icon(Icons.emoji_emotions_outlined, color: palette.accentSoft),
+              ),
             Expanded(
               child: _recording
                   ? Container(
@@ -586,6 +593,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
     try {
       await ref.read(messagesProvider(widget.chatId).notifier).sendText(text);
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText(error, strings))),
+      );
+    }
+  }
+
+  Future<void> _showStickers(AppStrings strings) async {
+    final palette = context.palette;
+    final picked = await showModalBottomSheet<CoralSticker>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: palette.surface,
+      builder: (context) => StickerPicker(
+        strings: strings,
+        onPick: (sticker) => Navigator.pop(context, sticker),
+      ),
+    );
+    if (picked == null) return;
+    try {
+      await ref
+          .read(messagesProvider(widget.chatId).notifier)
+          .sendSticker(stickerIdOf(picked));
       _scrollToBottom();
     } catch (error) {
       if (!mounted) return;

@@ -201,7 +201,9 @@ class MessageService {
                     ? MessageKind.video
                     : type == 'video_note'
                         ? MessageKind.videoNote
-                        : MessageKind.text;
+                        : type == 'sticker'
+                            ? MessageKind.sticker
+                            : MessageKind.text;
     final hasData = type == 'file' ||
         type == 'audio' ||
         type == 'video' ||
@@ -228,7 +230,9 @@ class MessageService {
                     ? 'Видео'
                     : messageKind == MessageKind.videoNote
                         ? 'Видеокружок'
-                        : text;
+                : messageKind == MessageKind.sticker
+                    ? 'Стикер'
+                    : text;
     await store.touchChat(groupId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) {
       await store.markChatRead(groupId);
@@ -594,6 +598,24 @@ class MessageService {
         'type': 'video_note',
         'data': base64Data,
         'meta': {'mime': mime, 'size': size, 'durationMs': durationMs},
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  /// Sends one of the built-in reef stickers. The id travels in the encrypted
+  /// envelope, so the artwork itself never crosses the wire.
+  Future<Message> sendSticker(String chatId, String stickerId) async {
+    return _sendEnvelope(
+      chatId: chatId,
+      kind: MessageKind.sticker,
+      preview: 'Стикер',
+      meta: {'sticker': stickerId},
+      envelope: {
+        'v': 1,
+        'type': 'sticker',
+        'meta': {'sticker': stickerId},
         'text': '',
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       },
@@ -1117,7 +1139,9 @@ class MessageService {
                     ? 'Видео'
                     : kind == MessageKind.videoNote
                         ? 'Видеокружок'
-                        : text;
+                : kind == MessageKind.sticker
+                    ? 'Стикер'
+                    : text;
     await store.touchChat(senderId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) await store.markChatRead(senderId);
     if (ack && viaRelay) {
@@ -1186,7 +1210,16 @@ class MessageService {
     if (message.status != MessageStatus.failed) return;
     final Map<String, dynamic> envelope;
     final String wireKind;
-    if (message.kind == MessageKind.image) {
+    if (message.kind == MessageKind.sticker) {
+      envelope = {
+        'v': 1,
+        'type': 'sticker',
+        'meta': message.meta,
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      wireKind = 'sticker';
+    } else if (message.kind == MessageKind.image) {
       envelope = {
         'v': 1,
         'type': 'image',

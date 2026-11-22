@@ -42,14 +42,13 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
         MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)),
       );
     };
-    // Initialize and, on Android/iOS, ask for the notification permission up
-    // front so incoming messages can surface even before the user opens
-    // Settings.
-    unawaited(notifications.init().then((_) {
-      if (ref.read(settingsProvider).notificationMode != NotificationMode.offline) {
-        unawaited(notifications.requestPermission());
-      }
-    }));
+    // Initialize and, on Android/iOS, ask for the notification permission once
+    // the first frame is on screen. Asking earlier can be ignored by the
+    // platform, which leaves the app with sound but no notification in the
+    // shade. The check also runs whenever the app comes back to the foreground.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_ensureNotifications());
+    });
     _resetIdle();
   }
 
@@ -74,12 +73,23 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
       case AppLifecycleState.resumed:
         session.setPresence('active');
         _resetIdle();
+        unawaited(_ensureNotifications());
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         session.setPresence('away');
     }
+  }
+
+  Future<void> _ensureNotifications() async {
+    final notifications = ref.read(notificationProvider);
+    if (ref.read(settingsProvider).notificationMode == NotificationMode.offline) {
+      return;
+    }
+    await notifications.init();
+    if (await notifications.areEnabled()) return;
+    await notifications.requestPermission();
   }
 
   @override

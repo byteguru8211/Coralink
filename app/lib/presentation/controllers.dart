@@ -298,6 +298,22 @@ class MessagesController extends Notifier<MessagesState> {
     }
   }
 
+  Future<void> sendSticker(String stickerId) async {
+    final client = ref.read(clientProvider);
+    state = state.copyWith(sending: true, error: null);
+    try {
+      await client.messages.sendSticker(chatId, stickerId);
+      final settings = ref.read(settingsProvider);
+      await ref.read(audioProvider).playCue(SoundCue.send, settings.sendSoundId);
+      await _load();
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+      rethrow;
+    } finally {
+      if (ref.mounted) state = state.copyWith(sending: false);
+    }
+  }
+
   Future<void> sendImage(String base64Data, String mime, String name) async {
     final client = ref.read(clientProvider);
     state = state.copyWith(sending: true, error: null);

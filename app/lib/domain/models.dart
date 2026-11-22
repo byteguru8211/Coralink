@@ -280,7 +280,7 @@ class Chat {
       );
 }
 
-enum MessageKind { text, image, file, audio, video, videoNote, reaction, delete }
+enum MessageKind { text, image, file, audio, video, videoNote, sticker, reaction, delete }
 
 MessageKind messageKindFromWire(String? value) => switch (value) {
       'image' => MessageKind.image,
@@ -288,6 +288,7 @@ MessageKind messageKindFromWire(String? value) => switch (value) {
       'audio' => MessageKind.audio,
       'video' => MessageKind.video,
       'video_note' => MessageKind.videoNote,
+      'sticker' => MessageKind.sticker,
       'reaction' => MessageKind.reaction,
       'delete' => MessageKind.delete,
       _ => MessageKind.text,
@@ -300,6 +301,7 @@ String messageKindToWire(MessageKind kind) => switch (kind) {
       MessageKind.audio => 'audio',
       MessageKind.video => 'video',
       MessageKind.videoNote => 'video_note',
+      MessageKind.sticker => 'sticker',
       MessageKind.reaction => 'reaction',
       MessageKind.delete => 'delete',
     };
@@ -355,6 +357,7 @@ class Message {
   bool get isAudio => kind == MessageKind.audio;
   bool get isVideo => kind == MessageKind.video;
   bool get isVideoNote => kind == MessageKind.videoNote;
+  bool get isSticker => kind == MessageKind.sticker;
   bool get isControl => kind == MessageKind.reaction || kind == MessageKind.delete;
 
   Message copyWith({

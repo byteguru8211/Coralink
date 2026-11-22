@@ -73,7 +73,15 @@ class SettingsNotificationsScreen extends ConsumerWidget {
                       .setNotificationMode(option.$1);
                   if (!granted && context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(strings.get('notificationsDenied'))),
+                      SnackBar(
+                        content: Text(strings.get('notificationsDenied')),
+                        action: SnackBarAction(
+                          label: strings.get('notifOpenSettings'),
+                          onPressed: () => ref
+                              .read(notificationProvider)
+                              .openSystemSettings(),
+                        ),
+                      ),
                     );
                   }
                 },
@@ -153,6 +161,34 @@ class SettingsNotificationsScreen extends ConsumerWidget {
                 ),
               ),
             ),
+          const SizedBox(height: 6),
+          SettingsTile(
+            icon: Icons.notifications_active_outlined,
+            title: strings.get('notifTest'),
+            subtitle: strings.get('notifTestDesc'),
+            onTap: () async {
+              final notifications = ref.read(notificationProvider);
+              final granted = await notifications.requestPermission();
+              if (!granted) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(strings.get('notificationsDenied')),
+                    action: SnackBarAction(
+                      label: strings.get('notifOpenSettings'),
+                      onPressed: notifications.openSystemSettings,
+                    ),
+                  ),
+                );
+                return;
+              }
+              await notifications.showTest(settings.notificationMode);
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(strings.get('notifTestSent'))),
+              );
+            },
+          ),
           if (defaultTargetPlatform == TargetPlatform.android) ...[
             const SizedBox(height: 20),
             GlassPanel(
