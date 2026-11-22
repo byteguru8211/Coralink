@@ -7,7 +7,9 @@ import '../data/local_store.dart';
 import '../data/secure_store.dart';
 import '../data/settings_store.dart';
 import '../services/audio_service.dart';
+import '../services/keep_alive.dart';
 import '../services/notification_service.dart';
+import 'desktop_window.dart';
 
 final configProvider = Provider<AppConfig>(
   (ref) => throw UnimplementedError('configProvider must be overridden'),
@@ -46,7 +48,10 @@ class SettingsController extends Notifier<AppSettings> {
   Future<void> setTheme(ThemeMode mode) =>
       _update(state.copyWith(themeMode: mode));
 
-  Future<void> setLocale(String code) => _update(state.copyWith(localeCode: code));
+  Future<void> setLocale(String code) async {
+    await _update(state.copyWith(localeCode: code));
+    await DesktopShell.instance.setLocale(code);
+  }
 
   Future<void> setNotificationMode(NotificationMode mode) async {
     final notifications = ref.read(notificationProvider);
@@ -56,14 +61,30 @@ class SettingsController extends Notifier<AppSettings> {
     await _update(state.copyWith(notificationMode: mode));
   }
 
-  Future<void> setRustle(bool value) =>
-      _update(state.copyWith(rustleSound: value));
+  /// Picks the sound that plays for one functional cue.
+  Future<void> setSound(SoundCue cue, String soundId) async {
+    final next = switch (cue) {
+      SoundCue.presence => state.copyWith(presenceSoundId: soundId),
+      SoundCue.send => state.copyWith(sendSoundId: soundId),
+      SoundCue.receive => state.copyWith(receiveSoundId: soundId),
+      SoundCue.call => state.copyWith(callSoundId: soundId),
+    };
+    await _update(next);
+  }
 
-  Future<void> setSendSound(bool value) =>
-      _update(state.copyWith(sendSound: value));
+  Future<void> setBackgroundAlive(bool value) async {
+    await _update(state.copyWith(backgroundAlive: value));
+    if (value) {
+      await startKeepAlive();
+    } else {
+      await stopKeepAlive();
+    }
+  }
 
-  Future<void> setReceiveSound(bool value) =>
-      _update(state.copyWith(receiveSound: value));
+  Future<void> setTrayClose(bool value) async {
+    DesktopShell.instance.setCloseToTray(value);
+    await _update(state.copyWith(trayClose: value));
+  }
 
   Future<void> setVolume(double value) => _update(state.copyWith(volume: value));
 

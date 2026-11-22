@@ -13,7 +13,7 @@ class SqliteLocalStore implements LocalStore {
 
   final Database _db;
 
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   static Future<void> createSchema(Database db, int version) async {
     await db.execute('''
@@ -96,7 +96,23 @@ class SqliteLocalStore implements LocalStore {
         attempts INTEGER NOT NULL DEFAULT 0
       )
     ''');
+    await db.execute(_callsTable);
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id, started_at)',
+    );
   }
+
+  static const _callsTable = '''
+      CREATE TABLE IF NOT EXISTS calls(
+        id TEXT PRIMARY KEY,
+        peer_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        video INTEGER NOT NULL DEFAULT 0,
+        outgoing INTEGER NOT NULL DEFAULT 1,
+        answered INTEGER NOT NULL DEFAULT 0,
+        duration_seconds INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
 
   /// Adds the avatar columns introduced in schema v2 for databases created
   /// before profile photos existed.
@@ -120,6 +136,12 @@ class SqliteLocalStore implements LocalStore {
         'ALTER TABLE chats ADD COLUMN member_count INTEGER NOT NULL DEFAULT 0',
       );
     }
+    if (oldVersion < 4) {
+      await db.execute(_callsTable);
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id, started_at)',
+      );
+    }
   }
 
   @override
@@ -131,6 +153,7 @@ class SqliteLocalStore implements LocalStore {
     await _db.delete('chats');
     await _db.delete('contacts');
     await _db.delete('outbox');
+    await _db.delete('calls');
     await _db.delete('users');
   }
 
@@ -377,8 +400,39 @@ class SqliteLocalStore implements LocalStore {
   }
 
   @override
+  Future<bool> hasContact(String id) async {
+    final rows = await _db.query(
+      'contacts',
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  @override
   Future<void> deleteContact(String id) =>
       _db.delete('contacts', where: 'id = ?', whereArgs: [id]);
+
+  @override
+  Future<void> upsertCall(CallRecord record) => _db.insert(
+        'calls',
+        record.toRow(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+  @override
+  Future<List<CallRecord>> getCalls(String peerId, {int limit = 60}) async {
+    final rows = await _db.query(
+      'calls',
+      where: 'peer_id = ?',
+      whereArgs: [peerId],
+      orderBy: 'started_at DESC',
+      limit: limit,
+    );
+    return rows.reversed.map(CallRecord.fromRow).toList();
+  }
 
   @override
   Future<void> enqueueOutbox(OutboxItem item) => _db.insert(

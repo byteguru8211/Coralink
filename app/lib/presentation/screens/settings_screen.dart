@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -109,6 +110,35 @@ class SettingsScreen extends ConsumerWidget {
               ],
             ),
           ),
+          if (defaultTargetPlatform == TargetPlatform.windows) ...[
+            SectionHeader(strings.get('desktopSection')),
+            GlassPanel(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    value: settings.trayClose,
+                    activeColor: palette.accent,
+                    onChanged: (value) => ref
+                        .read(settingsProvider.notifier)
+                        .setTrayClose(value),
+                    secondary: Icon(
+                      Icons.desktop_windows_outlined,
+                      color: palette.accent,
+                    ),
+                    title: Text(
+                      strings.get('trayClose'),
+                      style: TextStyle(color: palette.textPrimary, fontSize: 15),
+                    ),
+                    subtitle: Text(
+                      strings.get('trayCloseDesc'),
+                      style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           SectionHeader(strings.get('privacySection')),
           GlassPanel(
             padding: const EdgeInsets.symmetric(vertical: 4),

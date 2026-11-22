@@ -240,6 +240,9 @@ function parseClientEvent(raw) {
         fail('invalid_event', 'status must be active or away');
       }
       return { type: 'presence', status: event.status };
+    case 'ping':
+      // Application-level heartbeat sent by the client every 25 seconds.
+      return { type: 'ping' };
     default:
       fail('unknown_type', 'Unknown event type');
   }

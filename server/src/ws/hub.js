@@ -407,6 +407,9 @@ function createHub({ db, config, logger }) {
           event.status === 'away' ? 'away' : 'online',
         );
         break;
+      case 'ping':
+        send(ws, { type: 'pong' });
+        break;
       default:
         send(ws, {
           type: 'error',

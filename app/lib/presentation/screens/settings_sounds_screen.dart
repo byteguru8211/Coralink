@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/dependencies.dart';
 import '../../core/app_colors.dart';
+import '../../core/strings.dart';
 import '../../services/audio_service.dart';
 import '../widgets/coral_widgets.dart';
 
+/// Every functional moment (presence, sending, receiving, calls) gets its own
+/// sound, and each one can be swapped for any of the bundled nature sounds.
 class SettingsSoundsScreen extends ConsumerStatefulWidget {
   const SettingsSoundsScreen({super.key});
 
@@ -15,6 +18,92 @@ class SettingsSoundsScreen extends ConsumerStatefulWidget {
 
 class _SettingsSoundsScreenState extends ConsumerState<SettingsSoundsScreen> {
   late double _volume = ref.read(settingsProvider).volume;
+
+  IconData _cueIcon(SoundCue cue) => switch (cue) {
+        SoundCue.presence => Icons.forest_outlined,
+        SoundCue.send => Icons.water_drop_outlined,
+        SoundCue.receive => Icons.waves_outlined,
+        SoundCue.call => Icons.phone_in_talk_outlined,
+      };
+
+  String _soundLabel(AppStrings strings, String id) {
+    final sound = natureSoundFromId(id);
+    if (sound == null) return strings.get('soundOff');
+    return strings.get(soundNameKey(sound));
+  }
+
+  Future<void> _choose(SoundCue cue) async {
+    final strings = ref.read(stringsProvider);
+    final palette = context.palette;
+    final settings = ref.read(settingsProvider);
+    final audio = ref.read(audioProvider);
+    final current = settings.soundIdFor(cue);
+
+    final choice = await showModalBottomSheet<String?>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${strings.get(cueNameKey(cue))} · ${strings.get('soundPick')}',
+                    style: TextStyle(color: palette.textPrimary, fontSize: 15),
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: Icon(Icons.volume_off_rounded, color: palette.textMuted),
+                title: Text(
+                  strings.get('soundOff'),
+                  style: TextStyle(color: palette.textPrimary),
+                ),
+                trailing: current.isEmpty
+                    ? Icon(Icons.check_rounded, color: palette.accent)
+                    : null,
+                onTap: () => Navigator.pop(context, ''),
+              ),
+              for (final sound in kSoundChoices)
+                ListTile(
+                  leading: Icon(Icons.music_note_rounded, color: palette.accent),
+                  title: Text(
+                    strings.get(soundNameKey(sound)),
+                    style: TextStyle(color: palette.textPrimary),
+                  ),
+                  trailing: current == sound.name
+                      ? Icon(Icons.check_rounded, color: palette.accent)
+                      : IconButton(
+                          icon: Icon(
+                            Icons.play_circle_outline_rounded,
+                            color: palette.textMuted,
+                          ),
+                          onPressed: () => audio.preview(sound),
+                        ),
+                  onTap: () {
+                    audio.preview(sound);
+                    Navigator.pop(context, sound.name);
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice == null) return;
+    await ref.read(settingsProvider.notifier).setSound(cue, choice);
+    if (!mounted) return;
+    if (choice.isEmpty) return;
+    final sound = natureSoundFromId(choice);
+    if (sound != null && cue != SoundCue.presence) {
+      await ref.read(audioProvider).preview(sound);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +118,7 @@ class _SettingsSoundsScreenState extends ConsumerState<SettingsSoundsScreen> {
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 40),
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
             child: Text(
               strings.get('soundsTitle'),
               style: TextStyle(
@@ -39,50 +128,54 @@ class _SettingsSoundsScreenState extends ConsumerState<SettingsSoundsScreen> {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+            child: Text(
+              strings.get('soundsPerEventNote'),
+              style: TextStyle(color: palette.textMuted, fontSize: 12.5, height: 1.4),
+            ),
+          ),
           GlassPanel(
             margin: EdgeInsets.zero,
-            padding: const EdgeInsets.symmetric(vertical: 6),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
-                SwitchListTile(
-                  value: settings.rustleSound,
-                  onChanged: (value) {
-                    ref.read(settingsProvider.notifier).setRustle(value);
-                    if (value) audio.play(NatureSound.rustle, gain: 0.7);
-                  },
-                  secondary: Icon(Icons.forest_outlined, color: palette.accent),
-                  title: Text(strings.get('rustleSound')),
-                  subtitle: Text(
-                    strings.get('rustleSoundDesc'),
-                    style: TextStyle(color: palette.textMuted, fontSize: 12),
+                for (final cue in SoundCue.values)
+                  ListTile(
+                    onTap: () => _choose(cue),
+                    leading: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: palette.accent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(_cueIcon(cue), size: 20, color: palette.accent),
+                    ),
+                    title: Text(
+                      strings.get(cueNameKey(cue)),
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    subtitle: Text(
+                      _soundLabel(strings, settings.soundIdFor(cue)),
+                      style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                    ),
+                    trailing: IconButton(
+                      tooltip: strings.get('previewSounds'),
+                      icon: Icon(
+                        Icons.play_circle_outline_rounded,
+                        color: palette.textMuted,
+                      ),
+                      onPressed: () {
+                        final sound = natureSoundFromId(settings.soundIdFor(cue));
+                        if (sound != null) audio.preview(sound);
+                      },
+                    ),
                   ),
-                ),
-                SwitchListTile(
-                  value: settings.sendSound,
-                  onChanged: (value) {
-                    ref.read(settingsProvider.notifier).setSendSound(value);
-                    if (value) audio.play(NatureSound.drop);
-                  },
-                  secondary: Icon(Icons.water_drop_outlined, color: palette.accent),
-                  title: Text(strings.get('sendSound')),
-                  subtitle: Text(
-                    strings.get('sendSoundDesc'),
-                    style: TextStyle(color: palette.textMuted, fontSize: 12),
-                  ),
-                ),
-                SwitchListTile(
-                  value: settings.receiveSound,
-                  onChanged: (value) {
-                    ref.read(settingsProvider.notifier).setReceiveSound(value);
-                    if (value) audio.play(NatureSound.splash);
-                  },
-                  secondary: Icon(Icons.waves_outlined, color: palette.accent),
-                  title: Text(strings.get('receiveSound')),
-                  subtitle: Text(
-                    strings.get('receiveSoundDesc'),
-                    style: TextStyle(color: palette.textMuted, fontSize: 12),
-                  ),
-                ),
               ],
             ),
           ),
@@ -124,7 +217,7 @@ class _SettingsSoundsScreenState extends ConsumerState<SettingsSoundsScreen> {
           OutlinedButton.icon(
             onPressed: () => audio.previewAll(),
             icon: const Icon(Icons.play_circle_outline_rounded, size: 20),
-            label: Text(strings.get('previewSounds')),
+            label: Text(strings.get('previewAllSounds')),
           ),
         ],
       ),

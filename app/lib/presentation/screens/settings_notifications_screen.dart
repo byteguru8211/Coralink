@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/dependencies.dart';
 import '../../core/app_colors.dart';
 import '../../data/settings_store.dart';
+import '../widgets/coral_widgets.dart';
 
 class SettingsNotificationsScreen extends ConsumerWidget {
   const SettingsNotificationsScreen({super.key});
@@ -151,6 +153,28 @@ class SettingsNotificationsScreen extends ConsumerWidget {
                 ),
               ),
             ),
+          if (defaultTargetPlatform == TargetPlatform.android) ...[
+            const SizedBox(height: 20),
+            GlassPanel(
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: SwitchListTile(
+                value: settings.backgroundAlive,
+                activeColor: palette.accent,
+                onChanged: (value) =>
+                    ref.read(settingsProvider.notifier).setBackgroundAlive(value),
+                secondary: Icon(Icons.nightlight_round, color: palette.accent),
+                title: Text(
+                  strings.get('backgroundAlive'),
+                  style: TextStyle(color: palette.textPrimary, fontSize: 15),
+                ),
+                subtitle: Text(
+                  strings.get('backgroundAliveDesc'),
+                  style: TextStyle(color: palette.textMuted, fontSize: 12),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Row(
             children: [

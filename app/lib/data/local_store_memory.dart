@@ -9,6 +9,7 @@ class MemoryLocalStore implements LocalStore {
   final _messages = <String, Message>{};
   final _contacts = <String, Contact>{};
   final _outbox = <String, OutboxItem>{};
+  final _calls = <CallRecord>[];
 
   @override
   Future<void> close() async {}
@@ -20,6 +21,7 @@ class MemoryLocalStore implements LocalStore {
     _messages.clear();
     _contacts.clear();
     _outbox.clear();
+    _calls.clear();
   }
 
   @override
@@ -226,7 +228,24 @@ class MemoryLocalStore implements LocalStore {
   }
 
   @override
+  Future<bool> hasContact(String id) async => _contacts.containsKey(id);
+
+  @override
   Future<void> deleteContact(String id) async => _contacts.remove(id);
+
+  @override
+  Future<void> upsertCall(CallRecord record) async {
+    _calls.removeWhere((call) => call.id == record.id);
+    _calls.add(record);
+  }
+
+  @override
+  Future<List<CallRecord>> getCalls(String peerId, {int limit = 60}) async {
+    final list = _calls.where((call) => call.peerId == peerId).toList()
+      ..sort((a, b) => a.startedAt.compareTo(b.startedAt));
+    final tail = list.length > limit ? list.sublist(list.length - limit) : list;
+    return tail;
+  }
 
   @override
   Future<void> enqueueOutbox(OutboxItem item) async => _outbox[item.id] = item;

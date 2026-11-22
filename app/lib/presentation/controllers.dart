@@ -56,6 +56,7 @@ class ChatsController extends Notifier<ChatsState> {
       ..add(client.messages.messageUpdates.listen((_) => _scheduleReload()))
       ..add(client.messages.incoming.listen((_) => _scheduleReload()))
       ..add(client.messages.presenceEvents.listen((_) => _scheduleReload()))
+      ..add(client.messages.groupEvents.listen((_) => _scheduleReload()))
       ..add(client.realtime.statuses.listen((status) {
         if (!ref.mounted) return;
         state = state.copyWith(connection: status);
@@ -136,6 +137,7 @@ class MessagesState {
     this.presence = Presence.offline,
     this.lastSeen,
     this.sending = false,
+    this.calls = const [],
     this.error,
   });
 
@@ -148,6 +150,7 @@ class MessagesState {
   final Presence presence;
   final DateTime? lastSeen;
   final bool sending;
+  final List<CallRecord> calls;
   final String? error;
 
   MessagesState copyWith({
@@ -160,6 +163,7 @@ class MessagesState {
     Presence? presence,
     DateTime? lastSeen,
     bool? sending,
+    List<CallRecord>? calls,
     String? error,
   }) =>
       MessagesState(
@@ -172,6 +176,7 @@ class MessagesState {
         presence: presence ?? this.presence,
         lastSeen: lastSeen ?? this.lastSeen,
         sending: sending ?? this.sending,
+        calls: calls ?? this.calls,
         error: error,
       );
 }
@@ -216,6 +221,10 @@ class MessagesController extends Notifier<MessagesState> {
       ..add(client.messages.directChanges.listen((event) {
         if (event.peerId != chatId || !ref.mounted) return;
         state = state.copyWith(direct: event.direct);
+      }))
+      ..add(client.call.completed.listen((call) {
+        if (call.peerId != chatId || !ref.mounted) return;
+        unawaited(_load());
       }));
     unawaited(client.messages.openChat(chatId));
     unawaited(_load());
@@ -242,11 +251,13 @@ class MessagesController extends Notifier<MessagesState> {
       includeArchived: state.showArchive,
     );
     final archivedCount = await client.store.countArchivedMessages(chatId);
+    final calls = await client.store.getCalls(chatId);
     if (!ref.mounted) return;
     state = state.copyWith(
       loading: false,
       messages: messages,
       archivedCount: archivedCount,
+      calls: calls,
       presence: chat?.peerPresence ?? state.presence,
       lastSeen: chat?.peerLastSeen ?? state.lastSeen,
       direct: client.messages.isDirect(chatId),
@@ -277,9 +288,7 @@ class MessagesController extends Notifier<MessagesState> {
     try {
       await client.messages.sendText(chatId, text);
       final settings = ref.read(settingsProvider);
-      if (settings.sendSound) {
-        await ref.read(audioProvider).play(NatureSound.drop);
-      }
+      await ref.read(audioProvider).playCue(SoundCue.send, settings.sendSoundId);
       await _load();
     } catch (error) {
       if (ref.mounted) state = state.copyWith(error: '$error');
@@ -300,9 +309,7 @@ class MessagesController extends Notifier<MessagesState> {
         name: name,
       );
       final settings = ref.read(settingsProvider);
-      if (settings.sendSound) {
-        await ref.read(audioProvider).play(NatureSound.drop);
-      }
+      await ref.read(audioProvider).playCue(SoundCue.send, settings.sendSoundId);
       await _load();
     } catch (error) {
       if (ref.mounted) state = state.copyWith(error: '$error');
@@ -329,9 +336,7 @@ class MessagesController extends Notifier<MessagesState> {
         size: size,
       );
       final settings = ref.read(settingsProvider);
-      if (settings.sendSound) {
-        await ref.read(audioProvider).play(NatureSound.drop);
-      }
+      await ref.read(audioProvider).playCue(SoundCue.send, settings.sendSoundId);
       await _load();
     } catch (error) {
       if (ref.mounted) state = state.copyWith(error: '$error');
@@ -481,8 +486,22 @@ class ContactsState {
 }
 
 class ContactsController extends Notifier<ContactsState> {
+  final _subscriptions = <StreamSubscription>[];
+
   @override
   ContactsState build() {
+    final client = ref.watch(clientProvider);
+    // Contacts must follow what the messaging layer learns about people
+    // (new peers, renamed profiles, presence) without a manual pull-to-refresh.
+    _subscriptions
+      ..add(client.messages.messageUpdates.listen((_) => _load()))
+      ..add(client.messages.presenceEvents.listen((_) => _load()))
+      ..add(client.messages.groupEvents.listen((_) => refresh()));
+    ref.onDispose(() {
+      for (final sub in _subscriptions) {
+        sub.cancel();
+      }
+    });
     unawaited(_load());
     return const ContactsState();
   }

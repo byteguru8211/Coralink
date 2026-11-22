@@ -80,7 +80,16 @@ Ok "Node $((node -v))"
 $tscmd = Join-Path $Tailscale "tailscale.exe"
 if (-not (Test-Path $tscmd)) { throw "Tailscale not found at $tscmd. Install it and sign in." }
 $tsState = (& $tscmd status --json 2>$null | ConvertFrom-Json).BackendState
-if ($tsState -ne "Running") { Warn "Tailscale backend is '$tsState'. Opening login..."; & $tscmd up; return }
+if ($tsState -ne "Running") {
+    Warn "Tailscale backend is '$tsState'. Opening login..."
+    & $tscmd up
+    # `tailscale up` returns after the browser sign-in: re-check and continue in
+    # the same run instead of making the user launch the script a second time.
+    $tsState = (& $tscmd status --json 2>$null | ConvertFrom-Json).BackendState
+    if ($tsState -ne "Running") {
+        throw "Tailscale is still '$tsState'. Finish the sign-in, then run this script again."
+    }
+}
 Ok "Tailscale connected"
 
 Say "Preparing .env"

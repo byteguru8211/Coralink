@@ -158,8 +158,10 @@ class NotificationService {
           ),
         ),
     };
+    // One live notification per conversation: a new message replaces the
+    // previous banner instead of stacking a pile of separate notifications.
     await _plugin.show(
-      id: body.hashCode & 0x7fffffff,
+      id: chatId.hashCode & 0x7fffffff,
       title: title,
       body: body,
       payload: chatId,

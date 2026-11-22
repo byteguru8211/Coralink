@@ -9,6 +9,25 @@ import 'realtime.dart';
 
 enum CallStatus { idle, outgoing, incoming, active, ended }
 
+/// A finished call, handed to the caller so it can be persisted in history.
+class CallSummary {
+  const CallSummary({
+    required this.peerId,
+    required this.video,
+    required this.outgoing,
+    required this.startedAt,
+    required this.answered,
+    required this.durationSeconds,
+  });
+
+  final String peerId;
+  final bool video;
+  final bool outgoing;
+  final DateTime startedAt;
+  final bool answered;
+  final int durationSeconds;
+}
+
 /// Peer-to-peer audio/video calls. Signaling rides the existing WebSocket;
 /// media is WebRTC. On a tailnet peers are directly reachable, so no TURN is
 /// required (STUN is used opportunistically).
@@ -27,6 +46,10 @@ class CallService {
   final _changes = StreamController<CallStatus>.broadcast();
   Stream<CallStatus> get changes => _changes.stream;
 
+  final _completions = StreamController<CallSummary>.broadcast();
+  /// Emits once per finished call (answered, missed, declined or failed).
+  Stream<CallSummary> get completed => _completions.stream;
+
   final RTCVideoRenderer localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer remoteRenderer = RTCVideoRenderer();
   bool _renderersReady = false;
@@ -36,6 +59,18 @@ class CallService {
   bool video = false;
   bool muted = false;
   bool cameraOn = true;
+  bool speakerOn = false;
+  bool outgoing = true;
+  DateTime? startedAt;
+  DateTime? connectedAt;
+
+  /// Seconds the call has been connected for (0 while ringing).
+  int get elapsedSeconds {
+    final from = connectedAt;
+    if (from == null) return 0;
+    final value = DateTime.now().difference(from).inSeconds;
+    return value < 0 ? 0 : value;
+  }
 
   RTCPeerConnection? _pc;
   MediaStream? _local;
@@ -87,6 +122,10 @@ class CallService {
     peerId = remotePeerId;
     video = withVideo;
     cameraOn = withVideo;
+    outgoing = true;
+    speakerOn = false;
+    startedAt = DateTime.now();
+    connectedAt = null;
     _setStatus(CallStatus.outgoing);
     try {
       await _setupMedia();
@@ -105,6 +144,8 @@ class CallService {
 
   Future<void> accept() async {
     if (status != CallStatus.incoming || _pendingOffer == null) return;
+    outgoing = false;
+    connectedAt = DateTime.now();
     _setStatus(CallStatus.active);
     try {
       await _setupMedia();
@@ -144,6 +185,27 @@ class CallService {
     cameraOn = !cameraOn;
     for (final track in _local?.getVideoTracks() ?? const <MediaStreamTrack>[]) {
       track.enabled = cameraOn;
+    }
+  }
+
+  /// Routes call audio through the loudspeaker (mobile) or the system default.
+  Future<void> toggleSpeaker() async {
+    speakerOn = !speakerOn;
+    try {
+      await Helper.setSpeakerphoneOn(speakerOn);
+    } catch (error) {
+      Log.e('call.speaker', error);
+    }
+  }
+
+  /// Switches between the front and back camera during a video call.
+  Future<void> switchCamera() async {
+    final tracks = _local?.getVideoTracks() ?? const <MediaStreamTrack>[];
+    if (tracks.isEmpty) return;
+    try {
+      await Helper.switchCamera(tracks.first);
+    } catch (error) {
+      Log.e('call.camera', error);
     }
   }
 
@@ -187,6 +249,7 @@ class CallService {
         unawaited(_teardown());
       } else if (state ==
           RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        connectedAt ??= DateTime.now();
         _setStatus(CallStatus.active);
       }
     };
@@ -243,6 +306,10 @@ class CallService {
           peerId = from;
           video = data['mode'] == 'video';
           cameraOn = video;
+          outgoing = false;
+          speakerOn = false;
+          startedAt = DateTime.now();
+          connectedAt = null;
           _pendingOffer = data['sdp'] as String?;
           _setStatus(CallStatus.incoming);
         case 'answer':
@@ -251,6 +318,7 @@ class CallService {
             await _pc!
                 .setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
             _markRemoteSet();
+            connectedAt ??= DateTime.now();
             _setStatus(CallStatus.active);
           }
         case 'ice':
@@ -300,12 +368,30 @@ class CallService {
     _pendingOffer = null;
     _remoteDescriptionSet = false;
     _pendingCandidates.clear();
-    final wasActive = inCall;
+    final wasInCall = inCall;
+    final summaryPeer = peerId;
+    final summary = summaryPeer == null
+        ? null
+        : CallSummary(
+            peerId: summaryPeer,
+            video: video,
+            outgoing: outgoing,
+            startedAt: startedAt ?? DateTime.now(),
+            answered: connectedAt != null,
+            durationSeconds: elapsedSeconds,
+          );
     peerId = null;
     video = false;
     muted = false;
     cameraOn = true;
-    if (wasActive) _setStatus(CallStatus.ended);
+    speakerOn = false;
+    outgoing = true;
+    startedAt = null;
+    connectedAt = null;
+    if (wasInCall && summary != null && !_completions.isClosed) {
+      _completions.add(summary);
+    }
+    if (wasInCall) _setStatus(CallStatus.ended);
     _setStatus(CallStatus.idle);
   }
 
@@ -317,5 +403,6 @@ class CallService {
       remoteRenderer.dispose();
     } catch (_) {}
     await _changes.close();
+    await _completions.close();
   }
 }

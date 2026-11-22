@@ -443,6 +443,66 @@ class Contact {
   final DateTime addedAt;
 }
 
+/// One finished (or missed) audio/video call with a peer, kept locally so the
+/// conversation has a real call history like any messenger.
+class CallRecord {
+  const CallRecord({
+    required this.id,
+    required this.peerId,
+    required this.startedAt,
+    this.video = false,
+    this.outgoing = true,
+    this.answered = false,
+    this.durationSeconds = 0,
+  });
+
+  final String id;
+  final String peerId;
+  final DateTime startedAt;
+  final bool video;
+  final bool outgoing;
+  final bool answered;
+  final int durationSeconds;
+
+  bool get missed => !outgoing && !answered;
+
+  Map<String, Object?> toRow() => {
+        'id': id,
+        'peer_id': peerId,
+        'started_at': startedAt.millisecondsSinceEpoch,
+        'video': video ? 1 : 0,
+        'outgoing': outgoing ? 1 : 0,
+        'answered': answered ? 1 : 0,
+        'duration_seconds': durationSeconds,
+      };
+
+  factory CallRecord.fromRow(Map<String, Object?> row) => CallRecord(
+        id: row['id'] as String,
+        peerId: row['peer_id'] as String,
+        startedAt: DateTime.fromMillisecondsSinceEpoch(
+          (row['started_at'] as num).toInt(),
+        ),
+        video: (row['video'] as num?)?.toInt() == 1,
+        outgoing: (row['outgoing'] as num?)?.toInt() == 1,
+        answered: (row['answered'] as num?)?.toInt() == 1,
+        durationSeconds: (row['duration_seconds'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// Emitted by the messaging layer when another user's group key arrives, i.e.
+/// somebody added this account to a group.
+class GroupAddedEvent {
+  const GroupAddedEvent({
+    required this.groupId,
+    required this.title,
+    this.avatar = '',
+  });
+
+  final String groupId;
+  final String title;
+  final String avatar;
+}
+
 class GroupMember {
   const GroupMember({
     required this.id,

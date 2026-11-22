@@ -220,7 +220,9 @@ GET /api/v1/backup
 
 `ws(s)://host/ws?token=<JWT>`
 
-Неавторизованный upgrade → HTTP 401. Максимум 3 соединения на пользователя. Ping/pong каждые 30 с.
+Неавторизованный upgrade → HTTP 401. Максимум 3 соединения на пользователя.
+Клиент шлёт прикладной heartbeat `{"type":"ping"}` каждые 25 с, сервер отвечает
+`{"type":"pong"}`.
 
 ### Сервер → клиент
 
@@ -236,6 +238,7 @@ GET /api/v1/backup
 {"type":"call","from":"uuid","data":{"action":"call|answer|ice|decline|busy|hangup","mode":"audio|video","sdp":"...","candidate":"..."}}
 {"type":"typing","from":"uuid","on":true}
 {"type":"presence","userId":"uuid","status":"online|away|offline","lastSeen":1730000000000}
+{"type":"pong"}
 {"type":"error","code":"peer_offline","message":"Peer is not connected"}
 ```
 
@@ -256,6 +259,7 @@ relay WebRTC-signaling для звонков; если получатель оф
 {"type":"call","to":"uuid","data":{"action":"call","mode":"audio|video","sdp":"..."}}
 {"type":"typing","to":"uuid","on":true}
 {"type":"presence","status":"active|away"}
+{"type":"ping"}
 ```
 
 Правила:

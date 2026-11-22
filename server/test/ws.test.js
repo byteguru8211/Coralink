@@ -103,6 +103,24 @@ test(
 );
 
 test(
+  'client heartbeat ping is answered with pong instead of an error',
+  { timeout: TEST_TIMEOUT },
+  async (t) => {
+    const h = await createHarness(t);
+    const user = await h.login('79992000012', 'Ping User');
+    const ws = await h.openWs(user.token);
+    await ws.waitFor('ready');
+
+    ws.send({ type: 'ping' });
+    const pong = await ws.waitFor(
+      (event) => event.type === 'pong' || event.type === 'error',
+    );
+    assert.equal(pong.type, 'pong');
+    await ws.close();
+  },
+);
+
+test(
   'online message delivery returns a delivered ack and recipient ack notifies sender',
   { timeout: TEST_TIMEOUT },
   async (t) => {

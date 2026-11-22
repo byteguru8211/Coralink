@@ -5,8 +5,11 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { escapeLike } = require('./lib/validate');
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
+// Canonical users table definition. Shared by the initial schema and by the
+// legacy-database rebuild: older databases declared phone as NOT NULL, which
+// blocks nickname-only accounts (phone is optional in the current model).
+function usersTableSql(tableName) {
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
   id TEXT PRIMARY KEY,
   phone TEXT UNIQUE,
   username TEXT UNIQUE,
@@ -23,7 +26,11 @@ CREATE TABLE IF NOT EXISTS users (
   signed_prekey TEXT,
   signed_prekey_signature TEXT,
   presence_visibility TEXT NOT NULL DEFAULT 'contacts'
-);
+)`;
+}
+
+const SCHEMA = `
+${usersTableSql('users')};
 
 CREATE TABLE IF NOT EXISTS prekeys (
   user_id TEXT,
@@ -115,7 +122,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_recipient_delivered
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_group_messages_group
   ON group_messages(group_id, created_at);
@@ -233,6 +239,22 @@ class CoralinkDatabase {
     if (!userColumns.some((column) => column.name === 'password_hash')) {
       this.db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
     }
+    // Legacy databases declared phone as NOT NULL, which rejects nickname-only
+    // accounts. SQLite cannot drop a constraint in place, so rebuild the table.
+    const phoneColumn = this.db
+      .prepare('PRAGMA table_info(users)')
+      .all()
+      .find((column) => column.name === 'phone');
+    if (phoneColumn && Number(phoneColumn.notnull) === 1) {
+      this.rebuildUsersTable();
+    }
+    // These indexes can only be created once the columns exist (and after a
+    // rebuild, which drops the table's indexes), so they run here rather than
+    // in SCHEMA: older databases predate username/avatar/password_hash.
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)');
+    this.db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)',
+    );
 
     this.stmts = {
       getUserById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -407,6 +429,39 @@ class CoralinkDatabase {
       }
     }, 10 * 60 * 1000);
     this.cleanupTimer.unref();
+  }
+
+  // Copy rows from a legacy users table (phone NOT NULL) into the canonical
+  // definition and swap the tables. Indexes on users are recreated by the
+  // caller after this runs.
+  rebuildUsersTable() {
+    const columns = [
+      'id',
+      'phone',
+      'username',
+      'name',
+      'about',
+      'avatar_color',
+      'avatar',
+      'password_hash',
+      'created_at',
+      'last_seen',
+      'identity_key',
+      'registration_id',
+      'signed_prekey_id',
+      'signed_prekey',
+      'signed_prekey_signature',
+      'presence_visibility',
+    ].join(', ');
+    this.transaction(() => {
+      this.db.exec('DROP TABLE IF EXISTS users_rebuild');
+      this.db.exec(usersTableSql('users_rebuild'));
+      this.db.exec(
+        `INSERT INTO users_rebuild (${columns}) SELECT ${columns} FROM users`,
+      );
+      this.db.exec('DROP TABLE users');
+      this.db.exec('ALTER TABLE users_rebuild RENAME TO users');
+    });
   }
 
   transaction(callback) {

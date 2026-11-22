@@ -31,7 +31,7 @@ void _configure() {
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: 'coralink_keep_alive',
       channelName: 'Coralink · background',
-      channelDescription: 'Keeps Coralink receiving messages while closed',
+      channelDescription: 'Optional: keeps Coralink connected while closed',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
     ),
@@ -60,7 +60,7 @@ Future<void> startKeepAlive() async {
     await FlutterForegroundTask.startService(
       serviceId: 256,
       notificationTitle: 'Coralink',
-      notificationText: 'Coralink работает в фоне',
+      notificationText: 'Coralink на связи',
       serviceTypes: const [ForegroundServiceTypes.remoteMessaging],
       callback: _keepAliveCallback,
     );

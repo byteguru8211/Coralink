@@ -65,7 +65,11 @@ abstract class LocalStore {
 
   Future<void> upsertContact(User user, {DateTime? addedAt});
   Future<List<Contact>> getContacts();
+  Future<bool> hasContact(String id);
   Future<void> deleteContact(String id);
+
+  Future<void> upsertCall(CallRecord record);
+  Future<List<CallRecord>> getCalls(String peerId, {int limit = 60});
 
   Future<void> enqueueOutbox(OutboxItem item);
   Future<List<OutboxItem>> getOutbox();

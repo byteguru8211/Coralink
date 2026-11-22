@@ -70,7 +70,9 @@ Amnezia и Tailscale — оба WireGuard, но в разных диапазон
 
 Скрипт в корне проекта: [`start-coralink.ps1`](../start-coralink.ps1) (+ ярлык
 двойного клика [`start-coralink.cmd`](../start-coralink.cmd)). Идемпотентен:
-проверяет Node/Tailscale, поднимает `tailscale up` при необходимости, генерирует
+проверяет Node/Tailscale, при остановленном Tailscale запускает `tailscale up` и
+после входа продолжает в том же прогоне (если вход не завершён — попросит
+повторить запуск), генерирует
 `server/.env` с криптостойкими секретами (JWT_SECRET, AUTH_PEPPER), ставит
 зависимости, запускает сервер на `127.0.0.1:8080` (PID в `server/.server.pid`),
 публикует его через `tailscale serve` и печатает готовую ссылку.

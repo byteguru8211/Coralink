@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
 import 'app/dependencies.dart';
+import 'app/desktop_window.dart';
 import 'core/config.dart';
 import 'data/local_store_opener.dart';
 import 'data/secure_store.dart';
@@ -20,9 +21,11 @@ Future<void> main() async {
   final store = await openLocalStore(secure);
   final prefs = await SharedPreferences.getInstance();
   final settingsStore = SettingsStore(prefs);
+  final settings = settingsStore.load();
   final audio = AudioService();
   final notifications = NotificationService();
   await notifications.init();
+  await DesktopShell.instance.init(closeToTray: settings.trayClose);
 
   runApp(
     ProviderScope(
@@ -37,4 +40,9 @@ Future<void> main() async {
       child: const CoralinkApp(),
     ),
   );
+
+  // The tray needs the engine's view, so it is attached after the first frame.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(DesktopShell.instance.attachTray(locale: settings.localeCode));
+  });
 }

@@ -71,6 +71,7 @@ class MessageService {
   final _typing = StreamController<TypingEvent>.broadcast();
   final _directChanges = StreamController<({String peerId, bool direct})>.broadcast();
   final _removed = StreamController<String>.broadcast();
+  final _groups = StreamController<GroupAddedEvent>.broadcast();
   final directPeers = <String>{};
 
   late final StreamSubscription<RealtimeEvent> _eventSubscription;
@@ -90,6 +91,10 @@ class MessageService {
   Stream<TypingEvent> get typingEvents => _typing.stream;
   Stream<({String peerId, bool direct})> get directChanges => _directChanges.stream;
   Stream<String> get removedMessages => _removed.stream;
+
+  /// Fires when a group key arrives for a group this device did not know yet —
+  /// i.e. somebody just added this account to a group.
+  Stream<GroupAddedEvent> get groupEvents => _groups.stream;
 
   bool isDirect(String peerId) => directPeers.contains(peerId);
 
@@ -370,20 +375,63 @@ class MessageService {
         await store.upsertChat(updated);
         return updated;
       }
+      // A chat created from a bare id (or from an older session) can carry a
+      // placeholder name: fill in the real profile once, in the background.
+      if (existing.peerName.isEmpty || existing.peerName == 'Coralink') {
+        unawaited(_syncPeerProfile(peerId));
+      }
       return existing;
     }
     var user = peer;
     if (user == null) {
-      try {
-        user = await api.getUser(peerId);
-      } catch (_) {
-        user = User(id: peerId, phone: '', name: 'Coralink');
-      }
+      user = await store.getUser(peerId) ?? await _fetchPeer(peerId);
     }
     await store.upsertUser(user);
     final chat = Chat.fromUser(user);
     await store.upsertChat(chat);
+    // A brand-new conversation also becomes a contact, so the contacts tab and
+    // the chat list always agree about who this person is.
+    try {
+      await store.upsertContact(user);
+    } catch (error) {
+      Log.e('contact.ensure', error);
+    }
     return chat;
+  }
+
+  Future<User> _fetchPeer(String peerId) async {
+    try {
+      return await api.getUser(peerId);
+    } catch (error) {
+      Log.d('contact.profile', '$peerId: $error');
+      return User(id: peerId, phone: '', name: 'Coralink');
+    }
+  }
+
+  /// Refreshes the cached profile/chat row for a peer from the server. Used when
+  /// a conversation starts with somebody this device only knew by id.
+  Future<void> _syncPeerProfile(String peerId) async {
+    try {
+      final user = await api.getUser(peerId);
+      await store.upsertUser(user);
+      final chat = await store.getChat(peerId);
+      if (chat == null) return;
+      await store.upsertChat(chat.copyWith(
+        peerName: user.name,
+        peerPhone: user.phone,
+        peerAbout: user.about,
+        peerAvatarColor: user.avatarColor,
+        peerAvatar: user.avatar,
+        peerPresence: user.presence,
+        peerLastSeen: user.lastSeen,
+      ));
+      if (await store.hasContact(peerId)) {
+        await store.upsertContact(user);
+      }
+      _presence.add(PresenceEvent(peerId, user.presence, user.lastSeen));
+    } catch (error) {
+      Log.d('contact.sync', '$peerId: $error');
+    }
   }
 
   Future<Message> sendText(String chatId, String text) async {
@@ -846,7 +894,13 @@ class MessageService {
     }
     final user = await store.getUser(userId);
     if (user != null) {
-      await store.upsertUser(user.copyWith(presence: presence, lastSeen: lastSeen));
+      final updated = user.copyWith(presence: presence, lastSeen: lastSeen);
+      await store.upsertUser(updated);
+      // Keep the contacts row in step with the chat tile: a contact shown as
+      // "online" in chats must not look offline in the contacts tab.
+      if (await store.hasContact(userId)) {
+        await store.upsertContact(updated);
+      }
     }
     _presence.add(PresenceEvent(userId, presence, lastSeen));
   }
@@ -973,8 +1027,13 @@ class MessageService {
       final key = envelope['key'] as String?;
       if (groupId != null && key != null) {
         await groupCrypto.importKey(groupId, key);
+        final knownBefore = await store.getChat(groupId) != null;
+        var title = '';
+        var avatar = '';
         try {
           final group = await api.groupDetail(groupId);
+          title = group.title;
+          avatar = group.avatar;
           final existing = await store.getChat(groupId);
           final base = existing ??
               Chat.group(
@@ -990,6 +1049,25 @@ class MessageService {
           ));
         } catch (error) {
           Log.e('group.key', error);
+        }
+        if (title.isEmpty) {
+          title = envelope['title'] as String? ?? '';
+        }
+        // A key for an unknown group means this account was just added to it:
+        // surface the group in the chat list immediately and tell the user.
+        if (!knownBefore && title.isNotEmpty) {
+          final now = DateTime.now();
+          await store.touchChat(
+            groupId,
+            preview: title,
+            at: now,
+            incrementUnread: activeChatId != groupId,
+          );
+          _groups.add(GroupAddedEvent(
+            groupId: groupId,
+            title: title,
+            avatar: avatar,
+          ));
         }
       }
       if (ack && viaRelay) realtime.ackMessages([id]);
@@ -1178,5 +1256,6 @@ class MessageService {
     await _typing.close();
     await _directChanges.close();
     await _removed.close();
+    await _groups.close();
   }
 }

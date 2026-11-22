@@ -201,6 +201,171 @@ class _CoralMarkPainter extends CustomPainter {
       oldDelegate.start != start || oldDelegate.end != end || oldDelegate.leaf != leaf;
 }
 
+/// A coral that grows out of the sand: the trunk rises first, then the side
+/// branches, then the glowing polyps open. Used as the "a new coral has grown"
+/// moment when another conversation appears in the chat list.
+class GrowingCoral extends StatefulWidget {
+  const GrowingCoral({
+    super.key,
+    this.size = 76,
+    this.color,
+    this.tipColor,
+    this.duration = const Duration(milliseconds: 1600),
+  });
+
+  final double size;
+  final Color? color;
+  final Color? tipColor;
+  final Duration duration;
+
+  @override
+  State<GrowingCoral> createState() => _GrowingCoralState();
+}
+
+class _GrowingCoralState extends State<GrowingCoral>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: widget.duration,
+  )..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return IgnorePointer(
+      child: SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) => CustomPaint(
+            painter: _CoralGrowthPainter(
+              progress: Curves.easeOut.transform(_controller.value),
+              color: widget.color ?? palette.accentSoft,
+              tipColor: widget.tipColor ?? palette.halo,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CoralGrowthPainter extends CustomPainter {
+  _CoralGrowthPainter({
+    required this.progress,
+    required this.color,
+    required this.tipColor,
+  });
+
+  final double progress;
+  final Color color;
+  final Color tipColor;
+
+  double _phase(double from, double to) =>
+      ((progress - from) / (to - from)).clamp(0.0, 1.0);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final stroke = w * 0.055;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = stroke
+      ..color = color;
+    final glow = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = stroke * 2.1
+      ..color = color.withValues(alpha: 0.18)
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.05);
+
+    final trunk = Path()
+      ..moveTo(w * 0.50, h * 0.96)
+      ..cubicTo(w * 0.43, h * 0.78, w * 0.57, h * 0.56, w * 0.50, h * 0.27);
+    final left = Path()
+      ..moveTo(w * 0.49, h * 0.68)
+      ..cubicTo(w * 0.41, h * 0.60, w * 0.31, h * 0.58, w * 0.25, h * 0.42);
+    final right = Path()
+      ..moveTo(w * 0.51, h * 0.54)
+      ..cubicTo(w * 0.59, h * 0.46, w * 0.69, h * 0.44, w * 0.75, h * 0.28);
+    final leftTwig = Path()
+      ..moveTo(w * 0.32, h * 0.52)
+      ..cubicTo(w * 0.28, h * 0.47, w * 0.24, h * 0.50, w * 0.20, h * 0.53);
+    final rightTwig = Path()
+      ..moveTo(w * 0.68, h * 0.39)
+      ..cubicTo(w * 0.72, h * 0.34, w * 0.78, h * 0.36, w * 0.82, h * 0.40);
+
+    _grow(canvas, trunk, _phase(0.0, 0.46), paint, glow, tip: true);
+    _grow(canvas, left, _phase(0.30, 0.64), paint, glow, tip: true);
+    _grow(canvas, right, _phase(0.40, 0.74), paint, glow, tip: true);
+    _grow(canvas, leftTwig, _phase(0.58, 0.80), paint, glow);
+    _grow(canvas, rightTwig, _phase(0.64, 0.86), paint, glow);
+
+    // Polyps open at the tips once the branches are out.
+    final polyp = _phase(0.72, 1.0);
+    if (polyp <= 0) return;
+    final tips = <Offset>[
+      Offset(w * 0.50, h * 0.27),
+      Offset(w * 0.25, h * 0.42),
+      Offset(w * 0.75, h * 0.28),
+      Offset(w * 0.20, h * 0.53),
+      Offset(w * 0.82, h * 0.40),
+    ];
+    final polypPaint = Paint()
+      ..color = tipColor.withValues(alpha: 0.85 * polyp)
+      ..maskFilter = null;
+    for (var i = 0; i < tips.length; i++) {
+      final local = ((polyp - i * 0.08) / 0.7).clamp(0.0, 1.0);
+      if (local <= 0) continue;
+      canvas.drawCircle(tips[i], w * 0.035 * local, polypPaint);
+    }
+  }
+
+  void _grow(
+    Canvas canvas,
+    Path path,
+    double amount,
+    Paint paint,
+    Paint glow, {
+    bool tip = false,
+  }) {
+    if (amount <= 0) return;
+    for (final metric in path.computeMetrics()) {
+      final length = metric.length * amount;
+      if (length <= 0) continue;
+      final piece = metric.extractPath(0, length);
+      canvas.drawPath(piece, glow);
+      canvas.drawPath(piece, paint);
+      if (tip) {
+        final tangent = metric.getTangentForOffset(length);
+        if (tangent != null) {
+          canvas.drawCircle(
+            tangent.position,
+            paint.strokeWidth * 0.85,
+            Paint()..color = tipColor.withValues(alpha: 0.7),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CoralGrowthPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.color != color ||
+      oldDelegate.tipColor != tipColor;
+}
+
 class PulseHalo extends StatefulWidget {
   const PulseHalo({
     super.key,
@@ -297,6 +462,42 @@ Uint8List _decodeAvatar(String value) {
 
 class SeedAvatar extends StatelessWidget {
   const SeedAvatar({
+    super.key,
+    required this.seedId,
+    required this.name,
+    this.size = 52,
+    this.colorHex,
+    this.avatar,
+    this.online = false,
+    this.pulse = false,
+  });
+
+  final String seedId;
+  final String name;
+  final double size;
+  final String? colorHex;
+  final String? avatar;
+  final bool online;
+  final bool pulse;
+
+  @override
+  Widget build(BuildContext context) {
+    return SeedAvatarBody(
+      seedId: seedId,
+      name: name,
+      size: size,
+      colorHex: colorHex,
+      avatar: avatar,
+      online: online,
+      pulse: pulse,
+    );
+  }
+}
+
+/// The visual body of [SeedAvatar] without the widget wrapper, so callers can
+/// decorate it (for example with a growing coral behind it).
+class SeedAvatarBody extends StatelessWidget {
+  const SeedAvatarBody({
     super.key,
     required this.seedId,
     required this.name,

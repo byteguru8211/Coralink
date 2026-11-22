@@ -389,6 +389,7 @@ class ChatTile extends StatelessWidget {
     required this.onTap,
     required this.onLongPress,
     this.onArchive,
+    this.growing = false,
   });
 
   final Chat chat;
@@ -396,6 +397,9 @@ class ChatTile extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback? onArchive;
+
+  /// Plays the "new coral grew" animation for a freshly appeared chat.
+  final bool growing;
 
   @override
   Widget build(BuildContext context) {
@@ -418,14 +422,30 @@ class ChatTile extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 10, 14, 10),
         child: Row(
           children: [
-            SeedAvatar(
-              seedId: chat.peerId,
-              name: chat.peerName,
-              colorHex: chat.peerAvatarColor,
-              avatar: chat.peerAvatar,
-              online: online,
-              pulse: unread,
-              size: 54,
+            SizedBox(
+              width: 54,
+              height: 54,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  if (growing)
+                    OverflowBox(
+                      maxWidth: 94,
+                      maxHeight: 94,
+                      child: const GrowingCoral(size: 94),
+                    ),
+                  SeedAvatar(
+                    seedId: chat.peerId,
+                    name: chat.peerName,
+                    colorHex: chat.peerAvatarColor,
+                    avatar: chat.peerAvatar,
+                    online: online,
+                    pulse: unread,
+                    size: 54,
+                  ),
+                ],
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -519,6 +539,92 @@ class ChatTile extends StatelessWidget {
       ),
       onDismissed: (_) => onArchive?.call(),
       child: content,
+    );
+  }
+}
+
+/// A call entry inside the conversation timeline (like the call rows of other
+/// messengers). Data comes from the persisted call history.
+class CallHistoryChip extends StatelessWidget {
+  const CallHistoryChip({
+    super.key,
+    required this.record,
+    required this.strings,
+    this.onTap,
+  });
+
+  final CallRecord record;
+  final AppStrings strings;
+  final VoidCallback? onTap;
+
+  String _duration(int seconds) {
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final missed = record.missed;
+    final color = missed ? palette.coral : palette.accentSoft;
+    final label = missed
+        ? strings.get('callMissed')
+        : record.outgoing
+            ? strings.get('callOutgoing')
+            : strings.get('callIncoming');
+    final detail = record.answered
+        ? _duration(record.durationSeconds)
+        : missed
+            ? ''
+            : strings.get('callNoAnswer');
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 5),
+      child: Center(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              color: palette.surface.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: palette.divider),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  record.video ? Icons.videocam_rounded : Icons.call_rounded,
+                  size: 14,
+                  color: color,
+                ),
+                const SizedBox(width: 7),
+                Text(
+                  label,
+                  style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    detail,
+                    style: TextStyle(
+                      color: palette.textMuted,
+                      fontSize: 11.5,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 7),
+                Text(
+                  formatClock(record.startedAt),
+                  style: TextStyle(color: palette.textMuted, fontSize: 10.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

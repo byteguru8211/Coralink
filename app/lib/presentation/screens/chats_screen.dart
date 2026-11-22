@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,11 +26,49 @@ class ChatsScreen extends ConsumerStatefulWidget {
 class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   bool _archiveOpen = false;
 
+  // Coral growth: chats the list already knew about, and chats that just
+  // appeared and should sprout once.
+  final Set<String> _knownChatIds = <String>{};
+  final Set<String> _growingChatIds = <String>{};
+  final List<Timer> _growthTimers = <Timer>[];
+  bool _primed = false;
+
+  @override
+  void dispose() {
+    for (final timer in _growthTimers) {
+      timer.cancel();
+    }
+    super.dispose();
+  }
+
+  /// Detects conversations that appeared since the previous frame (a new peer,
+  /// a group invitation) and starts their coral growth animation.
+  void _syncGrowth(List<Chat> chats) {
+    final ids = chats.map((chat) => chat.id).toSet();
+    if (!_primed) {
+      _primed = true;
+      _knownChatIds.addAll(ids);
+      return;
+    }
+    final fresh = ids.difference(_knownChatIds);
+    _knownChatIds
+      ..clear()
+      ..addAll(ids);
+    if (fresh.isEmpty) return;
+    _growingChatIds.addAll(fresh);
+    final timer = Timer(const Duration(milliseconds: 2000), () {
+      if (!mounted) return;
+      setState(() => _growingChatIds.removeAll(fresh));
+    });
+    _growthTimers.add(timer);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(chatsProvider);
     final strings = ref.watch(stringsProvider);
     final palette = context.palette;
+    if (!state.loading) _syncGrowth(state.chats);
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -103,6 +143,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                           return ChatTile(
                             chat: chat,
                             strings: strings,
+                            growing: _growingChatIds.contains(chat.id),
                             onTap: () => _openChat(chat),
                             onLongPress: () => _showChatMenu(chat),
                             onArchive: () => ref.read(chatsProvider.notifier).archive(chat.id),

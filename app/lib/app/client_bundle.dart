@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:uuid/uuid.dart';
+
 import '../core/config.dart';
 import '../core/log.dart';
 import '../data/api_client.dart';
@@ -43,6 +45,7 @@ class ClientBundle {
   final P2PManager p2p;
   final MessageService messages;
   final EchoSearch echo;
+  StreamSubscription<CallSummary>? _callHistory;
 
   static Future<ClientBundle> create({
     required AppConfig config,
@@ -74,6 +77,25 @@ class ClientBundle {
       p2p: p2p,
       myId: user.id,
     );
+
+    final callHistory = call.completed.listen((summary) async {
+      try {
+        // A call can be the first contact with a peer: make sure the chat exists
+        // so the history chip has a conversation to live in, like any messenger.
+        await messages.ensureChat(summary.peerId);
+        await store.upsertCall(CallRecord(
+          id: const Uuid().v4(),
+          peerId: summary.peerId,
+          startedAt: summary.startedAt,
+          video: summary.video,
+          outgoing: summary.outgoing,
+          answered: summary.answered,
+          durationSeconds: summary.durationSeconds,
+        ));
+      } catch (error) {
+        Log.e('call.history', error);
+      }
+    });
 
     if (archiveDays > 0) {
       await store.autoArchiveInactive(Duration(days: archiveDays));
@@ -114,7 +136,7 @@ class ClientBundle {
       // Offline start: groups resync on the next connection.
     }
 
-    return ClientBundle._(
+    final bundle = ClientBundle._(
       config: config,
       secure: secure,
       store: store,
@@ -127,9 +149,12 @@ class ClientBundle {
       messages: messages,
       echo: EchoSearch(store),
     );
+    bundle._callHistory = callHistory;
+    return bundle;
   }
 
   Future<void> dispose() async {
+    await _callHistory?.cancel();
     await call.dispose();
     await p2p.dispose();
     await realtime.dispose();

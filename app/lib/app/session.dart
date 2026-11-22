@@ -251,7 +251,13 @@ class SessionController extends Notifier<SessionState> {
       client: bundle,
       pendingToken: token,
     );
-    unawaited(startKeepAlive());
+    // The optional Android background service is opt-in: it keeps a permanent
+    // notification, so it only runs when the user asked for it in settings.
+    if (ref.read(settingsProvider).backgroundAlive) {
+      unawaited(startKeepAlive());
+    } else {
+      unawaited(stopKeepAlive());
+    }
     unawaited(_syncBackup(bundle, user.id));
   }
 
@@ -277,7 +283,7 @@ class SessionController extends Notifier<SessionState> {
     // Signal identity stays in secure storage so a re-login on this device
     // keeps the same safety number and existing sessions.
     await ref.read(localStoreProvider).clearUserData();
-    ref.read(audioProvider).stopRustle();
+    ref.read(audioProvider).stopPresence();
     await ref.read(notificationProvider).cancelAll();
     await stopKeepAlive();
     state = const SessionState(status: SessionStatus.unauthenticated);

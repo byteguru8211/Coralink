@@ -74,7 +74,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Stop the ambient rustle when leaving the chat. `ref` is unusable in
     // dispose, so the service was captured in initState.
     _rustling = false;
-    _audio?.stopRustle();
+    _audio?.stopPresence();
     super.dispose();
   }
 
@@ -142,13 +142,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _syncRustle(MessagesState state) {
     final settings = ref.read(settingsProvider);
-    final shouldPlay = settings.rustleSound && state.presence != Presence.offline;
+    final shouldPlay = settings.presenceSoundId.isNotEmpty &&
+        state.presence != Presence.offline;
     if (shouldPlay && !_rustling) {
       _rustling = true;
-      _audio?.startRustle();
+      _audio?.startPresence(settings.presenceSoundId);
     } else if (!shouldPlay && _rustling) {
       _rustling = false;
-      _audio?.stopRustle();
+      _audio?.stopPresence();
     }
   }
 
@@ -375,7 +376,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
     );
 
-    if (state.messages.isEmpty) {
+    if (state.messages.isEmpty && state.calls.isEmpty) {
       widgets.add(
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 50),
@@ -394,19 +395,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
 
-    DateTime? lastDay;
+    // Messages and call history share one chronological timeline, so the
+    // conversation shows "Аудиозвонок · 2:31" exactly where it happened.
+    final entries = <({DateTime at, Widget child})>[];
+    final myId = ref.read(sessionProvider).user?.id ?? '';
     for (final message in state.messages) {
-      final local = message.createdAt.toLocal();
-      final day = DateTime(local.year, local.month, local.day);
-      if (lastDay == null || day != lastDay) {
-        widgets.add(DateDivider(label: relativeDay(message.createdAt, strings)));
-        lastDay = day;
-      }
-      widgets.add(
-        MessageBubble(
+      entries.add((
+        at: message.createdAt,
+        child: MessageBubble(
           key: ValueKey(message.id),
           message: message,
-          myId: ref.read(sessionProvider).user?.id ?? '',
+          myId: myId,
           strings: strings,
           onLongPress: () => _showMessageActions(message, strings),
           onOpenFile: message.isFile ? () => _saveFile(message, strings) : null,
@@ -414,7 +413,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ? () => ref.read(messagesProvider(widget.chatId).notifier).retry(message)
               : null,
         ),
-      );
+      ));
+    }
+    for (final call in state.calls) {
+      entries.add((
+        at: call.startedAt,
+        child: CallHistoryChip(
+          key: ValueKey('call-${call.id}'),
+          record: call,
+          strings: strings,
+        ),
+      ));
+    }
+    entries.sort((a, b) => a.at.compareTo(b.at));
+
+    DateTime? lastDay;
+    for (final entry in entries) {
+      final local = entry.at.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      if (lastDay == null || day != lastDay) {
+        widgets.add(DateDivider(label: relativeDay(entry.at, strings)));
+        lastDay = day;
+      }
+      widgets.add(entry.child);
     }
 
     return ListView.builder(
