@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite_common/sqlite_api.dart';
 
 import '../domain/models.dart';
+import '../domain/pet.dart';
 import 'local_store.dart';
 
 /// SQLite implementation shared by Android/iOS (SQLCipher) and desktop (FFI).
@@ -13,7 +14,7 @@ class SqliteLocalStore implements LocalStore {
 
   final Database _db;
 
-  static const schemaVersion = 4;
+  static const schemaVersion = 5;
 
   static Future<void> createSchema(Database db, int version) async {
     await db.execute('''
@@ -100,7 +101,16 @@ class SqliteLocalStore implements LocalStore {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id, started_at)',
     );
+    await db.execute(_petsTable);
   }
+
+  static const _petsTable = '''
+      CREATE TABLE IF NOT EXISTS pets(
+        chat_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''';
 
   static const _callsTable = '''
       CREATE TABLE IF NOT EXISTS calls(
@@ -142,6 +152,9 @@ class SqliteLocalStore implements LocalStore {
         'CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id, started_at)',
       );
     }
+    if (oldVersion < 5) {
+      await db.execute(_petsTable);
+    }
   }
 
   @override
@@ -155,6 +168,7 @@ class SqliteLocalStore implements LocalStore {
     await _db.delete('outbox');
     await _db.delete('calls');
     await _db.delete('users');
+    await _db.delete('pets');
   }
 
   @override
@@ -433,6 +447,35 @@ class SqliteLocalStore implements LocalStore {
     );
     return rows.reversed.map(CallRecord.fromRow).toList();
   }
+
+  @override
+  Future<void> upsertPet(PetState pet) => _db.insert(
+        'pets',
+        {
+          'chat_id': pet.chatId,
+          'state': jsonEncode(pet.toJson()),
+          'updated_at': pet.revision,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+  @override
+  Future<PetState?> getPet(String chatId) async {
+    final rows = await _db.query(
+      'pets',
+      where: 'chat_id = ?',
+      whereArgs: [chatId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final raw = jsonDecode(rows.first['state'] as String);
+    if (raw is! Map) return null;
+    return PetState.fromJson(raw.cast<String, dynamic>());
+  }
+
+  @override
+  Future<void> deletePet(String chatId) =>
+      _db.delete('pets', where: 'chat_id = ?', whereArgs: [chatId]);
 
   @override
   Future<void> enqueueOutbox(OutboxItem item) => _db.insert(

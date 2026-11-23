@@ -90,23 +90,25 @@ class _StickerViewState extends State<StickerView>
   Widget build(BuildContext context) {
     final artwork = AnimatedBuilder(
       animation: Listenable.merge([_controller, _bloom]),
-      builder: (context, _) => Transform.scale(
-        scale: _bloomScale.value,
-        child: CustomPaint(
-          size: Size.square(widget.size),
-          painter: _StickerPainter(
-            sticker: widget.sticker,
-            t: widget.animate ? _controller.value : 0.4,
-          ),
+      builder: (context, _) => CustomPaint(
+        size: Size.square(widget.size),
+        painter: _StickerPainter(
+          sticker: widget.sticker,
+          t: widget.animate ? _controller.value : 0.4,
+          bloom: _bloomScale.value,
         ),
       ),
     );
+    // A raw pointer listener instead of a tap recognizer: the whole sticker is
+    // one solid touch target, with no gesture-arena competition against the
+    // chat list or the bubble itself (which previously swallowed taps on the
+    // upper part of the artwork on Android).
     return Semantics(
       label: widget.sticker.name,
       button: true,
-      child: GestureDetector(
+      child: Listener(
         behavior: HitTestBehavior.opaque,
-        onTap: _bloomOnce,
+        onPointerDown: (_) => _bloomOnce(),
         child: SizedBox.square(dimension: widget.size, child: artwork),
       ),
     );
@@ -114,10 +116,15 @@ class _StickerViewState extends State<StickerView>
 }
 
 class _StickerPainter extends CustomPainter {
-  _StickerPainter({required this.sticker, required this.t});
+  _StickerPainter({
+    required this.sticker,
+    required this.t,
+    this.bloom = 1,
+  });
 
   final CoralSticker sticker;
   final double t;
+  final double bloom;
 
   static const _coral = Color(0xFFFF8A73);
   static const _coralDeep = Color(0xFFF2604F);
@@ -129,6 +136,9 @@ class _StickerPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     canvas.save();
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.scale(bloom);
+    canvas.translate(-size.width / 2, -size.height / 2);
     canvas.scale(size.width / 120, size.height / 120);
     final glow = Paint()
       ..shader = RadialGradient(
@@ -495,7 +505,9 @@ class _StickerPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _StickerPainter oldDelegate) =>
-      oldDelegate.sticker != sticker || oldDelegate.t != t;
+      oldDelegate.sticker != sticker ||
+      oldDelegate.t != t ||
+      oldDelegate.bloom != bloom;
 }
 
 /// The sticker tray opened from a chat. Each tile is a live preview, so the

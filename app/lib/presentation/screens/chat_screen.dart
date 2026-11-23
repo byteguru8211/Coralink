@@ -22,8 +22,10 @@ import '../../services/voice_recorder.dart';
 import '../controllers.dart';
 import '../widgets/chat_widgets.dart';
 import '../widgets/coral_widgets.dart';
+import '../widgets/pet_widgets.dart';
 import '../widgets/stickers.dart';
 import 'call_screen.dart';
+import 'video_note_screen.dart';
 
 enum _Attach { gallery, camera, file, video, videoNote }
 
@@ -51,6 +53,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _recording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
+  int _petExpand = 0;
 
   @override
   void initState() {
@@ -289,6 +292,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ? Center(child: CircularProgressIndicator(color: palette.accent))
                 : _buildMessages(state, strings, chat),
           ),
+          if (!_recording)
+            PetPanel(
+              chatId: widget.chatId,
+              strings: strings,
+              expandToken: _petExpand,
+            ),
           if (state.peerTyping)
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 2, 24, 4),
@@ -410,6 +419,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           strings: strings,
           onLongPress: () => _showMessageActions(message, strings),
           onOpenFile: message.isFile ? () => _saveFile(message, strings) : null,
+          onOpenPet: () => setState(() => _petExpand++),
           onRetry: message.status == MessageStatus.failed
               ? () => ref.read(messagesProvider(widget.chatId).notifier).retry(message)
               : null,
@@ -795,32 +805,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  // Captures a short front-facing clip for a circular video note. Kept brief
-  // and low-res by the native camera, and re-checked against the relay cap.
+  // Records a circular video note in-app. The recorder owns the camera, so the
+  // clip is framed in a circle while filming and has no fixed duration limit.
   Future<void> _recordVideoNote(AppStrings strings) async {
     try {
-      final file = await ImagePicker().pickVideo(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
-        maxDuration: const Duration(seconds: 12),
+      final capture = await Navigator.of(context).push<VideoNoteCapture>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => VideoNoteRecorderScreen(strings: strings),
+        ),
       );
-      if (file == null) return;
-      final bytes = await file.readAsBytes();
-      if (bytes.lengthInBytes > 6 * 1024 * 1024) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(strings.get('fileTooLarge'))),
-        );
-        return;
-      }
-      final mime = file.name.endsWith('.webm')
-          ? 'video/webm'
-          : (lookupMimeType(file.name) ?? 'video/mp4');
+      if (capture == null || capture.bytes.isEmpty) return;
       await ref.read(messagesProvider(widget.chatId).notifier).sendVideoNote(
-            base64Encode(bytes),
-            mime,
-            bytes.lengthInBytes,
-            0,
+            base64Encode(capture.bytes),
+            capture.mime,
+            capture.bytes.lengthInBytes,
+            capture.durationMs,
           );
       _scrollToBottom();
     } catch (error) {

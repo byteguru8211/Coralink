@@ -113,6 +113,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final english = settings.localeCode == 'en';
     final preview = event.message.isSticker
         ? (english ? 'Sticker' : 'Стикер')
+        : event.message.isPet
+            ? (english ? 'Tamagotchi' : 'Тамагочи')
         : event.message.isImage
             ? (english ? 'Photo' : 'Фото')
             : event.message.text;

@@ -1,4 +1,5 @@
 import '../domain/models.dart';
+import '../domain/pet.dart';
 
 class OutboxItem {
   const OutboxItem({
@@ -70,6 +71,10 @@ abstract class LocalStore {
 
   Future<void> upsertCall(CallRecord record);
   Future<List<CallRecord>> getCalls(String peerId, {int limit = 60});
+
+  Future<void> upsertPet(PetState pet);
+  Future<PetState?> getPet(String chatId);
+  Future<void> deletePet(String chatId);
 
   Future<void> enqueueOutbox(OutboxItem item);
   Future<List<OutboxItem>> getOutbox();

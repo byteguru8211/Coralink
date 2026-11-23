@@ -1,5 +1,6 @@
 import 'local_store.dart';
 import '../domain/models.dart';
+import '../domain/pet.dart';
 
 /// Ephemeral store used by the web build. Chats live in memory only, so the
 /// web target is a demo/preview surface; mobile and desktop persist data.
@@ -10,6 +11,7 @@ class MemoryLocalStore implements LocalStore {
   final _contacts = <String, Contact>{};
   final _outbox = <String, OutboxItem>{};
   final _calls = <CallRecord>[];
+  final _pets = <String, PetState>{};
 
   @override
   Future<void> close() async {}
@@ -22,6 +24,7 @@ class MemoryLocalStore implements LocalStore {
     _contacts.clear();
     _outbox.clear();
     _calls.clear();
+    _pets.clear();
   }
 
   @override
@@ -246,6 +249,15 @@ class MemoryLocalStore implements LocalStore {
     final tail = list.length > limit ? list.sublist(list.length - limit) : list;
     return tail;
   }
+
+  @override
+  Future<void> upsertPet(PetState pet) async => _pets[pet.chatId] = pet;
+
+  @override
+  Future<PetState?> getPet(String chatId) async => _pets[chatId];
+
+  @override
+  Future<void> deletePet(String chatId) async => _pets.remove(chatId);
 
   @override
   Future<void> enqueueOutbox(OutboxItem item) async => _outbox[item.id] = item;

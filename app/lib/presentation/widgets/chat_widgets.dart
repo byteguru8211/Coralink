@@ -13,6 +13,7 @@ import '../../core/utils.dart';
 import '../../domain/models.dart';
 import '../../services/video_note_media.dart';
 import 'coral_widgets.dart';
+import 'pet_widgets.dart';
 import 'stickers.dart';
 
 class MessageBubble extends StatefulWidget {
@@ -24,6 +25,7 @@ class MessageBubble extends StatefulWidget {
     this.onLongPress,
     this.onRetry,
     this.onOpenFile,
+    this.onOpenPet,
     this.highlight = false,
   });
 
@@ -33,6 +35,7 @@ class MessageBubble extends StatefulWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
   final VoidCallback? onOpenFile;
+  final VoidCallback? onOpenPet;
   final bool highlight;
 
   @override
@@ -72,6 +75,17 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
 
     // Stickers live outside the chat bubble: they are little illustrations of
     // their own, with the delivery drop tucked underneath.
+    if (message.isPet && !deleted) {
+      return PetEventChip(
+        message: message,
+        mine: mine,
+        strings: widget.strings,
+        highlight: widget.highlight,
+        onTap: widget.onOpenPet,
+        onLongPress: widget.onLongPress,
+      );
+    }
+
     if (message.isSticker && !deleted) {
       final sticker = stickerFromId(message.meta['sticker'] as String?) ??
           CoralSticker.wave;
@@ -383,26 +397,70 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
   }
 }
 
+/// Delivery drop. It follows the app's water metaphor but is now a bright,
+/// readable status rather than a faint speck: white while in flight, mint when
+/// delivered, and a glowing mint drop with a check once read.
 class _StatusDrop extends StatelessWidget {
   const _StatusDrop({required this.status});
   final MessageStatus status;
 
+  String _label(AppStrings strings) => switch (status) {
+        MessageStatus.sending => strings.get('statusSending'),
+        MessageStatus.sent => strings.get('statusSent'),
+        MessageStatus.delivered => strings.get('statusDelivered'),
+        MessageStatus.read => strings.get('statusRead'),
+        MessageStatus.failed => strings.get('failedToSend'),
+      };
+
   @override
   Widget build(BuildContext context) {
-    final color = context.palette.outgoingText;
-    final opacity = switch (status) {
-      MessageStatus.sending => 0.25,
-      MessageStatus.sent => 0.45,
-      MessageStatus.delivered => 0.7,
-      MessageStatus.read => 1.0,
-      MessageStatus.failed => 1.0,
+    final palette = context.palette;
+    final white = palette.outgoingText;
+    final (color, size, opacity) = switch (status) {
+      MessageStatus.sending => (white, 11.0, 0.55),
+      MessageStatus.sent => (white, 12.5, 0.85),
+      MessageStatus.delivered => (palette.halo, 14.0, 1.0),
+      MessageStatus.read => (palette.halo, 14.5, 1.0),
+      MessageStatus.failed => (palette.coral, 14.0, 1.0),
     };
-    return Icon(
-      Icons.water_drop_rounded,
-      size: status == MessageStatus.read ? 12 : 10.5,
-      color: status == MessageStatus.failed
-          ? context.palette.coral
-          : color.withValues(alpha: opacity),
+    final read = status == MessageStatus.read;
+    final delivered = status == MessageStatus.delivered;
+    return Semantics(
+      label: _label(AppStrings(Localizations.localeOf(context))),
+      child: Container(
+        padding: const EdgeInsets.all(1.5),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: (read || delivered)
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.55),
+                    blurRadius: read ? 9 : 5,
+                    spreadRadius: read ? 1.5 : 0.5,
+                  ),
+                ]
+              : null,
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(
+              Icons.water_drop_rounded,
+              size: size,
+              color: color.withValues(alpha: opacity),
+            ),
+            if (read)
+              Positioned(
+                bottom: 1.5,
+                child: Icon(
+                  Icons.check_rounded,
+                  size: 7.5,
+                  color: palette.outgoingBubble,
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

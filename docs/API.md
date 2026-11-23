@@ -249,7 +249,7 @@ relay WebRTC-signaling для звонков; если получатель оф
 ### Клиент → сервер
 
 ```json
-{"type":"message","id":"uuid","to":"uuid","ciphertext":"<base64>","kind":"text|image|file|audio|video|video_note|sticker|control","meta":{},"createdAt":1730000000000}
+{"type":"message","id":"uuid","to":"uuid","ciphertext":"<base64>","kind":"text|image|file|audio|video|video_note|sticker|pet|control","meta":{},"createdAt":1730000000000}
 {"type":"message.ack","ids":["uuid"]}
 {"type":"message.read","chatWith":"uuid","ids":["uuid"]}
 {"type":"group.send","id":"uuid","groupId":"uuid","ciphertext":"<base64>","kind":"text","meta":{},"createdAt":1730000000000}
@@ -269,6 +269,7 @@ relay WebRTC-signaling для звонков; если получатель оф
 - Отправка дубликата `id` идемпотентна.
 - `kind=control` используется для реакций и удаления; сервер считает нагрузку непрозрачной.
 - `kind=sticker` — стикер: в шифрованном конверте лежит `{"type":"sticker","meta":{"sticker":"wave"}}`; id — один из `wave`, `hug`, `moon`, `star`, `laugh`, `miss`, `yay`, `thanks`.
+- `kind=pet` — событие тамагочи: в конверте `{"type":"pet","action":"adopt|feed|play|care|sleep|rename","state":{…}}`. Состояние (вид, имя, XP, шкалы, ревизия) целиком зашифровано; в открытом `meta` только `{"pet":"<action>"}`. Служебные кадры синхронизации (`action=ping|snapshot`) не сохраняются как сообщения.
 - `signal`/`call` доставляются только при живом сокете получателя, иначе `peer_offline`/`busy`.
 - Тело сообщения не логируется.
 

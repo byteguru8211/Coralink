@@ -6,6 +6,7 @@ import '../core/log.dart';
 import '../data/api_client.dart';
 import '../data/local_store.dart';
 import '../domain/models.dart';
+import '../domain/pet.dart';
 import '../network/p2p.dart';
 import '../network/realtime.dart';
 import '../security/group_crypto.dart';
@@ -28,6 +29,22 @@ class TypingEvent {
   const TypingEvent(this.userId, this.typing);
   final String userId;
   final bool typing;
+}
+
+/// A shared-pet event that changes the conversation's Tamagotchi: adoption,
+/// care, rename, a sync request or a state snapshot. Travels encrypted.
+class PetEvent {
+  const PetEvent({
+    required this.chatId,
+    required this.senderId,
+    required this.action,
+    required this.state,
+  });
+
+  final String chatId;
+  final String senderId;
+  final String action;
+  final PetState state;
 }
 
 class MessageService {
@@ -72,6 +89,7 @@ class MessageService {
   final _directChanges = StreamController<({String peerId, bool direct})>.broadcast();
   final _removed = StreamController<String>.broadcast();
   final _groups = StreamController<GroupAddedEvent>.broadcast();
+  final _pets = StreamController<PetEvent>.broadcast();
   final directPeers = <String>{};
 
   late final StreamSubscription<RealtimeEvent> _eventSubscription;
@@ -95,6 +113,9 @@ class MessageService {
   /// Fires when a group key arrives for a group this device did not know yet —
   /// i.e. somebody just added this account to a group.
   Stream<GroupAddedEvent> get groupEvents => _groups.stream;
+
+  /// Shared Tamagotchi events (care, adoption, rename and sync snapshots).
+  Stream<PetEvent> get petEvents => _pets.stream;
 
   bool isDirect(String peerId) => directPeers.contains(peerId);
 
@@ -186,9 +207,30 @@ class MessageService {
       }
       return true;
     }
+    if (type == 'pet') {
+      final action = envelope['action'] as String? ?? 'care';
+      final rawState = envelope['state'];
+      final petState = rawState is Map
+          ? PetState.fromJson(rawState.cast<String, dynamic>())
+          : null;
+      if (petState != null) {
+        _pets.add(PetEvent(
+          chatId: groupId,
+          senderId: senderId,
+          action: action,
+          state: petState,
+        ));
+      }
+      // Sync ping/snapshot frames are not conversation content: they only keep
+      // the shared pet in step and must not appear as a message.
+      if (action == 'ping' || action == 'snapshot') return true;
+    }
     final image = envelope['image'] as String?;
     final fileData = envelope['data'] as String?;
-    final meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    var meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    if (type == 'pet' && envelope['state'] is Map) {
+      meta = {...meta, 'petState': envelope['state']};
+    }
     final text = (envelope['text'] as String?) ?? '';
     final isActive = activeChatId == groupId;
     final MessageKind messageKind = type == 'image'
@@ -203,7 +245,9 @@ class MessageService {
                         ? MessageKind.videoNote
                         : type == 'sticker'
                             ? MessageKind.sticker
-                            : MessageKind.text;
+                            : type == 'pet'
+                                ? MessageKind.pet
+                                : MessageKind.text;
     final hasData = type == 'file' ||
         type == 'audio' ||
         type == 'video' ||
@@ -232,7 +276,9 @@ class MessageService {
                         ? 'Видеокружок'
                 : messageKind == MessageKind.sticker
                     ? 'Стикер'
-                    : text;
+                    : messageKind == MessageKind.pet
+                        ? 'Тамагочи'
+                        : text;
     await store.touchChat(groupId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) {
       await store.markChatRead(groupId);
@@ -622,6 +668,81 @@ class MessageService {
     );
   }
 
+  /// Asks the other participants for their current pet state. Used when this
+  /// device has no pet yet (fresh install, new chat) so a shared companion can
+  /// be adopted into an existing conversation instead of starting over.
+  Future<void> requestPetSync(String chatId) async {
+    final current = await store.getPet(chatId);
+    await _sendPetSignal(chatId, 'ping', current);
+  }
+
+  /// Answers a sync request with the full (encrypted) pet state.
+  Future<void> sendPetSnapshot(String chatId, PetState pet) async {
+    await _sendPetSignal(chatId, 'snapshot', pet);
+  }
+
+  /// Pet sync frames are encrypted like everything else but never stored as
+  /// chat messages: they are transport for the shared state itself.
+  Future<void> _sendPetSignal(
+    String chatId,
+    String action,
+    PetState? pet,
+  ) async {
+    final chat = await store.getChat(chatId);
+    final isGroup = chat?.isGroup ?? false;
+    final envelope = <String, dynamic>{
+      'v': 1,
+      'type': 'pet',
+      'action': action,
+      if (pet != null) 'state': pet.toJson(),
+      'sentAt': DateTime.now().millisecondsSinceEpoch,
+    };
+    try {
+      final ciphertext = isGroup
+          ? await groupCrypto.encrypt(chatId, envelope)
+          : await signal.encrypt(chatId, envelope);
+      final id = const Uuid().v4();
+      _dispatchSend(
+        isGroup,
+        id,
+        chatId,
+        ciphertext,
+        'control',
+        const {'pet': 'sync'},
+        DateTime.now(),
+      );
+    } catch (error) {
+      Log.d('pet.sync', '$action: $error');
+    }
+  }
+
+  /// Sends a shared Tamagotchi care event. The action and the resulting pet
+  /// state travel inside the encrypted envelope; the relay only sees the kind,
+  /// so a conversation's little companion stays private.
+  Future<Message> sendPet(
+    String chatId, {
+    required String action,
+    required PetState state,
+    required String preview,
+  }) async {
+    final encoded = state.toJson();
+    return _sendEnvelope(
+      chatId: chatId,
+      kind: MessageKind.pet,
+      preview: preview,
+      meta: {'pet': action, 'petState': encoded},
+      envelope: {
+        'v': 1,
+        'type': 'pet',
+        'action': action,
+        'state': encoded,
+        'meta': {'pet': action},
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
   Future<void> sendReaction(String chatId, String messageId, String emoji) async {
     final target = await store.getMessage(messageId);
     if (target == null) return;
@@ -721,8 +842,10 @@ class MessageService {
       // meta: relay meta is size-capped server-side, so a base64 payload there
       // would reject the send and strand the recipient. The recipient rebuilds
       // meta['data'] from the decrypted envelope.
-      final wireMeta = meta.containsKey('data')
-          ? (<String, dynamic>{...meta}..remove('data'))
+      final wireMeta = (meta.containsKey('data') || meta.containsKey('petState'))
+          ? (<String, dynamic>{...meta}
+            ..remove('data')
+            ..remove('petState'))
           : meta;
       final wireKind = control ? 'control' : messageKindToWire(kind);
       final payload = {
@@ -1044,6 +1167,25 @@ class MessageService {
       if (ack && viaRelay) realtime.ackMessages([id]);
       return;
     }
+    if (type == 'pet') {
+      final action = envelope['action'] as String? ?? 'care';
+      final rawState = envelope['state'];
+      final petState = rawState is Map
+          ? PetState.fromJson(rawState.cast<String, dynamic>())
+          : null;
+      if (petState != null) {
+        _pets.add(PetEvent(
+          chatId: senderId,
+          senderId: senderId,
+          action: action,
+          state: petState,
+        ));
+      }
+      if (action == 'ping' || action == 'snapshot') {
+        if (ack && viaRelay) realtime.ackMessages([id]);
+        return;
+      }
+    }
     if (type == 'groupKey') {
       final groupId = envelope['groupId'] as String?;
       final key = envelope['key'] as String?;
@@ -1100,7 +1242,10 @@ class MessageService {
     final isActive = activeChatId == senderId;
     final image = envelope['image'] as String?;
     final fileData = envelope['data'] as String?;
-    final meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    var meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    if (type == 'pet' && envelope['state'] is Map) {
+      meta = {...meta, 'petState': envelope['state']};
+    }
     final text = (envelope['text'] as String?) ?? '';
     final MessageKind kind = type == 'image'
         ? MessageKind.image
@@ -1112,7 +1257,11 @@ class MessageService {
                     ? MessageKind.video
                     : type == 'video_note'
                         ? MessageKind.videoNote
-                        : MessageKind.text;
+                        : type == 'sticker'
+                            ? MessageKind.sticker
+                            : type == 'pet'
+                                ? MessageKind.pet
+                                : MessageKind.text;
     final hasData = type == 'file' ||
         type == 'audio' ||
         type == 'video' ||
@@ -1141,7 +1290,9 @@ class MessageService {
                         ? 'Видеокружок'
                 : kind == MessageKind.sticker
                     ? 'Стикер'
-                    : text;
+                    : kind == MessageKind.pet
+                        ? 'Тамагочи'
+                        : text;
     await store.touchChat(senderId, preview: preview, at: createdAt, incrementUnread: !isActive);
     if (isActive) await store.markChatRead(senderId);
     if (ack && viaRelay) {
@@ -1199,6 +1350,13 @@ class MessageService {
       }
     }
     await store.markChatRead(chatId);
+    // A message that arrived before this device had a Signal session can be
+    // recovered once the session exists (for example after a reconnect or a
+    // key exchange). Retry those placeholders whenever the chat is opened.
+    if (messages.any((m) =>
+        m.meta['undecryptable'] == true && m.meta['enc'] is String)) {
+      unawaited(_retryPending(chatId));
+    }
     await p2p.ensureLink(chatId);
   }
 
@@ -1219,6 +1377,21 @@ class MessageService {
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       };
       wireKind = 'sticker';
+    } else if (message.kind == MessageKind.pet) {
+      final rawState = message.meta['petState'];
+      final state = rawState is Map
+          ? PetState.fromJson(rawState.cast<String, dynamic>())
+          : null;
+      envelope = {
+        'v': 1,
+        'type': 'pet',
+        'action': message.meta['pet'],
+        if (state != null) 'state': state.toJson(),
+        'meta': {'pet': message.meta['pet']},
+        'text': '',
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      wireKind = 'pet';
     } else if (message.kind == MessageKind.image) {
       envelope = {
         'v': 1,
@@ -1263,8 +1436,11 @@ class MessageService {
     }
     final ciphertext = await signal.encrypt(message.chatId, envelope);
     await store.upsertMessage(message.copyWith(status: MessageStatus.sending));
-    final retryMeta = message.meta.containsKey('data')
-        ? (<String, dynamic>{...message.meta}..remove('data'))
+    final retryMeta = (message.meta.containsKey('data') ||
+            message.meta.containsKey('petState'))
+        ? (<String, dynamic>{...message.meta}
+          ..remove('data')
+          ..remove('petState'))
         : message.meta;
     realtime.sendMessage(
       id: message.id,
@@ -1290,5 +1466,6 @@ class MessageService {
     await _directChanges.close();
     await _removed.close();
     await _groups.close();
+    await _pets.close();
   }
 }
