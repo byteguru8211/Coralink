@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 // Development-only defaults. Both are intentionally long enough for HS256 but
 // must never be used in production.

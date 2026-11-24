@@ -314,6 +314,29 @@ test(
     assert.equal(upload.status, 200);
     assert.equal(upload.body.ok, true);
 
+    const stock = await h.api('/api/v1/keys/status', { token: alice.token });
+    assert.equal(stock.body.count, 2);
+
+    const info = await h.api(`/api/v1/keys/${alice.user.id}/info`, {
+      token: bob.token,
+    });
+    assert.equal(info.status, 200);
+    assert.equal(info.body.identityKey, identityKey);
+    assert.equal(info.body.preKey, undefined);
+
+    const conflict = await h.api('/api/v1/keys', {
+      method: 'POST',
+      token: alice.token,
+      body: {
+        identityKey: base64('different-identity-key'),
+        registrationId: 1234,
+        signedPreKey,
+        preKeys,
+      },
+    });
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.body.error.code, 'identity_changed');
+
     const firstBundle = await h.api(`/api/v1/keys/${alice.user.id}`, {
       token: bob.token,
     });
@@ -334,6 +357,8 @@ test(
     });
     assert.equal(exhaustedBundle.status, 200);
     assert.equal(exhaustedBundle.body.preKey, null);
+    const emptyStock = await h.api('/api/v1/keys/status', { token: alice.token });
+    assert.equal(emptyStock.body.count, 0);
 
     const noKeys = await h.api(`/api/v1/keys/${bob.user.id}`, {
       token: alice.token,
@@ -350,6 +375,8 @@ test(
     });
     assert.equal(replenish.status, 200);
     assert.equal(replenish.body.stored, 1);
+    const refilledStock = await h.api('/api/v1/keys/status', { token: alice.token });
+    assert.equal(refilledStock.body.count, 1);
 
     const replenishedBundle = await h.api(`/api/v1/keys/${alice.user.id}`, {
       token: bob.token,
@@ -475,7 +502,7 @@ test(
 
     const health = await h.api('/health');
     assert.equal(health.status, 200);
-    assert.deepEqual(health.body, { ok: true, version: '1.0.0' });
+    assert.deepEqual(health.body, { ok: true, version: '1.1.0' });
     assert.equal(health.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(health.headers.get('x-frame-options'), 'DENY');
     assert.equal(health.headers.get('referrer-policy'), 'no-referrer');

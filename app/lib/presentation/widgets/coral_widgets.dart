@@ -29,16 +29,23 @@ class CoralBackground extends StatelessWidget {
         ),
       ),
       child: Stack(
+        fit: StackFit.expand,
         children: [
           Positioned(
             top: -120,
             right: -90,
-            child: _GlowBlob(size: 300, color: palette.accent.withValues(alpha: 0.10)),
+            child: _GlowBlob(
+              size: 300,
+              color: palette.accent.withValues(alpha: 0.10),
+            ),
           ),
           Positioned(
             bottom: -140,
             left: -110,
-            child: _GlowBlob(size: 340, color: palette.halo.withValues(alpha: 0.07)),
+            child: _GlowBlob(
+              size: 340,
+              color: palette.halo.withValues(alpha: 0.07),
+            ),
           ),
           child,
         ],
@@ -54,15 +61,15 @@ class _GlowBlob extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IgnorePointer(
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
-          ),
-        ),
-      );
+    child: Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
+      ),
+    ),
+  );
 }
 
 /// The Coralink mark: a glass "C" with a sprout, drawn with a painter so it
@@ -158,7 +165,11 @@ class _CoralMarkPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = size.width * 0.035
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(base, base.translate(size.width * 0.02, -size.height * 0.16), stem);
+    canvas.drawLine(
+      base,
+      base.translate(size.width * 0.02, -size.height * 0.16),
+      stem,
+    );
 
     final leafPaint = Paint()..color = leaf.withValues(alpha: 0.92);
     final leafPath = Path()
@@ -190,15 +201,14 @@ class _CoralMarkPainter extends CustomPainter {
         base.dx + size.width * 0.02,
         base.dy - size.height * 0.17,
       );
-    canvas.drawPath(
-      leafPath2,
-      Paint()..color = leaf.withValues(alpha: 0.72),
-    );
+    canvas.drawPath(leafPath2, Paint()..color = leaf.withValues(alpha: 0.72));
   }
 
   @override
   bool shouldRepaint(covariant _CoralMarkPainter oldDelegate) =>
-      oldDelegate.start != start || oldDelegate.end != end || oldDelegate.leaf != leaf;
+      oldDelegate.start != start ||
+      oldDelegate.end != end ||
+      oldDelegate.leaf != leaf;
 }
 
 /// A coral that grows out of the sand: the trunk rises first, then the side
@@ -384,7 +394,8 @@ class PulseHalo extends StatefulWidget {
   State<PulseHalo> createState() => _PulseHaloState();
 }
 
-class _PulseHaloState extends State<PulseHalo> with SingleTickerProviderStateMixin {
+class _PulseHaloState extends State<PulseHalo>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 800),
@@ -456,7 +467,9 @@ class _PulseHaloState extends State<PulseHalo> with SingleTickerProviderStateMix
 
 Uint8List _decodeAvatar(String value) {
   final comma = value.indexOf(',');
-  final raw = value.startsWith('data:') && comma >= 0 ? value.substring(comma + 1) : value;
+  final raw = value.startsWith('data:') && comma >= 0
+      ? value.substring(comma + 1)
+      : value;
   return base64Decode(raw);
 }
 
@@ -519,7 +532,10 @@ class SeedAvatarBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = colorHex != null
-        ? [colorFromHex(colorHex!), colorFromHex(colorHex!).withValues(alpha: 0.55)]
+        ? [
+            colorFromHex(colorHex!),
+            colorFromHex(colorHex!).withValues(alpha: 0.55),
+          ]
         : seedGradient(seedId);
     final base = Container(
       width: size,
@@ -599,10 +615,12 @@ class TypingDots extends StatefulWidget {
   State<TypingDots> createState() => _TypingDotsState();
 }
 
-class _TypingDotsState extends State<TypingDots> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-        ..repeat();
+class _TypingDotsState extends State<TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
 
   @override
   void dispose() {
@@ -655,12 +673,17 @@ class ConnectionPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final connected = status == RealtimeStatus.connected;
-    final color = connected ? (direct ? palette.halo : palette.accent) : palette.coral;
+    final color = connected
+        ? (direct ? palette.halo : palette.accent)
+        : palette.coral;
     final label = connected
         ? (direct ? strings.get('p2pDirect') : strings.get('relayMode'))
         : strings.get('reconnecting');
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 14, vertical: compact ? 5 : 7),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 14,
+        vertical: compact ? 5 : 7,
+      ),
       decoration: BoxDecoration(
         color: palette.surface.withValues(alpha: 0.7),
         borderRadius: BorderRadius.circular(999),
@@ -673,7 +696,11 @@ class ConnectionPill extends StatelessWidget {
           const SizedBox(width: 7),
           Text(
             label,
-            style: TextStyle(color: palette.textMuted, fontSize: 11, fontWeight: FontWeight.w500),
+            style: TextStyle(
+              color: palette.textMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),
@@ -690,9 +717,12 @@ class _StatusDot extends StatefulWidget {
   State<_StatusDot> createState() => _StatusDotState();
 }
 
-class _StatusDotState extends State<_StatusDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+class _StatusDotState extends State<_StatusDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
 
   @override
   void initState() {
@@ -708,19 +738,21 @@ class _StatusDotState extends State<_StatusDot> with SingleTickerProviderStateMi
 
   @override
   Widget build(BuildContext context) => FadeTransition(
-        opacity: widget.pulsing
-            ? Tween(begin: 0.35, end: 1.0).animate(_controller)
-            : const AlwaysStoppedAnimation(1),
-        child: Container(
-          width: 7,
-          height: 7,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: widget.color,
-            boxShadow: [BoxShadow(color: widget.color.withValues(alpha: 0.6), blurRadius: 6)],
-          ),
-        ),
-      );
+    opacity: widget.pulsing
+        ? Tween(begin: 0.35, end: 1.0).animate(_controller)
+        : const AlwaysStoppedAnimation(1),
+    child: Container(
+      width: 7,
+      height: 7,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: widget.color,
+        boxShadow: [
+          BoxShadow(color: widget.color.withValues(alpha: 0.6), blurRadius: 6),
+        ],
+      ),
+    ),
+  );
 }
 
 class EmptyState extends StatelessWidget {
@@ -754,7 +786,10 @@ class EmptyState extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [palette.accent.withValues(alpha: 0.20), Colors.transparent],
+                  colors: [
+                    palette.accent.withValues(alpha: 0.20),
+                    Colors.transparent,
+                  ],
                 ),
               ),
               child: Icon(icon, size: 46, color: palette.accentSoft),
@@ -763,19 +798,30 @@ class EmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: palette.textPrimary),
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w500,
+                color: palette.textPrimary,
+              ),
             ),
             const SizedBox(height: 10),
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, height: 1.45, color: palette.textMuted),
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.45,
+                color: palette.textMuted,
+              ),
             ),
             if (actionLabel != null) ...[
               const SizedBox(height: 26),
               SizedBox(
                 width: 220,
-                child: FilledButton(onPressed: onAction, child: Text(actionLabel!)),
+                child: FilledButton(
+                  onPressed: onAction,
+                  child: Text(actionLabel!),
+                ),
               ),
             ],
           ],
@@ -842,10 +888,16 @@ class SettingsTile extends StatelessWidget {
         width: 38,
         height: 38,
         decoration: BoxDecoration(
-          color: (danger ? palette.coral : palette.accent).withValues(alpha: 0.12),
+          color: (danger ? palette.coral : palette.accent).withValues(
+            alpha: 0.12,
+          ),
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Icon(icon, size: 20, color: danger ? palette.coral : palette.accent),
+        child: Icon(
+          icon,
+          size: 20,
+          color: danger ? palette.coral : palette.accent,
+        ),
       ),
       title: Text(
         title,
@@ -857,11 +909,19 @@ class SettingsTile extends StatelessWidget {
       ),
       subtitle: subtitle == null
           ? null
-          : Text(subtitle!, style: TextStyle(color: palette.textMuted, fontSize: 12.5)),
-      trailing: trailing ??
+          : Text(
+              subtitle!,
+              style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+            ),
+      trailing:
+          trailing ??
           (onTap == null
               ? null
-              : Icon(Icons.chevron_right_rounded, color: palette.textMuted, size: 22)),
+              : Icon(
+                  Icons.chevron_right_rounded,
+                  color: palette.textMuted,
+                  size: 22,
+                )),
     );
   }
 }

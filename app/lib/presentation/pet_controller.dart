@@ -3,191 +3,118 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app/session.dart';
-import '../core/log.dart';
-import '../domain/models.dart';
 import '../domain/pet.dart';
-import '../services/message_service.dart';
 
 class PetUiState {
   const PetUiState({
-    this.loading = true,
-    this.pet,
+    this.loading = false,
+    this.record,
     this.busy = false,
     this.error,
   });
 
   final bool loading;
-  final PetState? pet;
+  final PetRecord? record;
   final bool busy;
   final String? error;
 
+  PetState? get pet => record?.state;
+  bool get canCare => record?.canCare ?? false;
+
   PetUiState copyWith({
     bool? loading,
-    PetState? pet,
+    PetRecord? record,
     bool? busy,
     String? error,
+    bool clearRecord = false,
     bool clearError = false,
-  }) =>
-      PetUiState(
-        loading: loading ?? this.loading,
-        pet: pet ?? this.pet,
-        busy: busy ?? this.busy,
-        error: clearError ? null : (error ?? this.error),
-      );
+  }) => PetUiState(
+    loading: loading ?? this.loading,
+    record: clearRecord ? null : (record ?? this.record),
+    busy: busy ?? this.busy,
+    error: clearError ? null : (error ?? this.error),
+  );
 }
 
-/// Drives the conversation's shared Tamagotchi: local ticking, care actions,
-/// adoption and merging of states that arrive from other participants.
 class PetController extends Notifier<PetUiState> {
   PetController(this.chatId);
 
   final String chatId;
-
   final _subscriptions = <StreamSubscription>[];
   Timer? _ticker;
-  Timer? _syncTimer;
-  DateTime? _lastSnapshotAt;
-  bool _requestedSync = false;
+
+  bool get _personal => chatId.startsWith('personal:');
 
   @override
   PetUiState build() {
     final client = ref.watch(clientProvider);
-    _subscriptions
-      ..add(client.messages.petEvents.listen(_onRemote))
-      ..add(client.messages.messageUpdates.listen(_onMessageUpdate));
+    _subscriptions.add(client.pets.updates.listen(_onRemote));
     _ticker = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
-    _load();
+    unawaited(_load());
     ref.onDispose(() {
-      for (final sub in _subscriptions) {
-        sub.cancel();
+      for (final subscription in _subscriptions) {
+        subscription.cancel();
       }
       _ticker?.cancel();
-      _syncTimer?.cancel();
     });
     return const PetUiState();
   }
 
   Future<void> _load() async {
-    final client = ref.read(clientProvider);
-    final stored = await client.store.getPet(chatId);
-    if (!ref.mounted) return;
-    final ticked = stored?.tick(DateTime.now());
-    if (ticked != null && stored != null && ticked.wellbeing != stored.wellbeing) {
-      await client.store.upsertPet(ticked);
-    }
-    state = state.copyWith(loading: false, pet: ticked ?? state.pet);
-    if (ticked == null && !_requestedSync) {
-      // A conversation without a local pet may still have one on the other
-      // side (fresh install). Ask quietly after the chat settles.
-      _requestedSync = true;
-      _syncTimer = Timer(const Duration(milliseconds: 1200), () {
-        client.messages.requestPetSync(chatId);
-      });
-    }
-  }
-
-  void _onMessageUpdate(Message message) {
-    if (message.chatId != chatId || !message.isPet) return;
-    final raw = message.meta['petState'];
-    if (raw is! Map) return;
-    final remote = PetState.fromJson(raw.cast<String, dynamic>());
-    if (remote == null) return;
-    _merge(remote);
-  }
-
-  void _onRemote(PetEvent event) {
-    if (event.chatId != chatId) return;
-    if (event.state.chatId != chatId) return;
-    if (event.action == 'ping') {
-      final mine = state.pet;
-      if (mine != null && mine.revision >= event.state.revision) {
-        _maybeSnapshot(mine);
+    try {
+      final record = await ref.read(clientProvider).pets.find(chatId);
+      if (!ref.mounted) return;
+      state = state.copyWith(
+        loading: false,
+        record: record,
+        clearRecord: record == null,
+        clearError: true,
+      );
+    } catch (error) {
+      if (ref.mounted) {
+        state = state.copyWith(loading: false, error: '$error');
       }
-      return;
     }
-    _merge(event.state);
   }
 
-  void _maybeSnapshot(PetState pet) {
-    final now = DateTime.now();
-    if (_lastSnapshotAt != null &&
-        now.difference(_lastSnapshotAt!) < const Duration(seconds: 5)) {
+  void _onRemote(PetRecord record) {
+    if (record.localChatId(ref.read(clientProvider).pets.myId) != chatId)
       return;
-    }
-    _lastSnapshotAt = now;
-    unawaited(
-      ref.read(clientProvider).messages.sendPetSnapshot(chatId, pet).catchError(
-        (Object error) => Log.d('pet.snapshot', '$error'),
-      ),
-    );
+    if (!ref.mounted) return;
+    state = state.copyWith(record: record, loading: false, clearError: true);
   }
 
-  Future<void> _merge(PetState remote) async {
-    final merged = mergePet(state.pet, remote);
-    if (identical(merged, state.pet)) return;
-    state = state.copyWith(pet: merged);
-    await ref.read(clientProvider).store.upsertPet(merged);
-  }
-
-  Future<void> _tick() async {
-    final pet = state.pet;
+  void _tick() {
+    final record = state.record;
+    final pet = record?.state;
     if (pet == null) return;
     final ticked = pet.tick(DateTime.now());
-    if (ticked.hunger == pet.hunger &&
-        ticked.joy == pet.joy &&
-        ticked.energy == pet.energy) {
-      return;
-    }
-    state = state.copyWith(pet: ticked);
-    await ref.read(clientProvider).store.upsertPet(ticked);
+    if (identical(ticked, pet)) return;
+    state = state.copyWith(record: record!.copyWith(state: ticked));
   }
 
   Future<void> adopt(PetSpecies species, String name) async {
     final client = ref.read(clientProvider);
-    final myId = ref.read(sessionProvider).user?.id ?? '';
-    final pet = PetState.adopt(
-      chatId: chatId,
-      species: species,
-      name: name,
-      adopterId: myId,
-    );
-    state = state.copyWith(pet: pet, busy: true, clearError: true);
-    await client.store.upsertPet(pet);
+    state = state.copyWith(busy: true, clearError: true);
     try {
-      await client.messages.sendPet(
-        chatId,
-        action: 'adopt',
-        state: pet,
-        preview: 'Тамагочи',
+      final record = await client.pets.create(
+        chatId: chatId,
+        species: species,
+        name: name,
+        personal: _personal,
       );
+      if (ref.mounted) state = state.copyWith(record: record, busy: false);
     } catch (error) {
-      Log.e('pet.adopt', error);
-      if (ref.mounted) state = state.copyWith(error: '$error');
-    } finally {
-      if (ref.mounted) state = state.copyWith(busy: false);
+      if (ref.mounted) state = state.copyWith(busy: false, error: '$error');
     }
   }
 
   Future<void> care(PetAction action) async {
-    final current = state.pet;
-    if (current == null) return;
-    final now = DateTime.now();
-    final myId = ref.read(sessionProvider).user?.id ?? '';
-    final before = current.tick(now);
-    if (before.cooldownLeft(action, now) > Duration.zero) return;
-    final pet = before.care(action, myId, now);
-    state = state.copyWith(pet: pet, busy: true, clearError: true);
     final client = ref.read(clientProvider);
-    await client.store.upsertPet(pet);
+    state = state.copyWith(busy: true, clearError: true);
     try {
-      await client.messages.sendPet(
-        chatId,
-        action: action.name,
-        state: pet,
-        preview: 'Тамагочи',
-      );
+      await client.pets.care(chatId, action);
     } catch (error) {
-      Log.e('pet.care', error);
       if (ref.mounted) state = state.copyWith(error: '$error');
     } finally {
       if (ref.mounted) state = state.copyWith(busy: false);
@@ -195,20 +122,54 @@ class PetController extends Notifier<PetUiState> {
   }
 
   Future<void> rename(String name) async {
-    final current = state.pet;
-    final clean = name.trim();
-    if (current == null || clean.isEmpty || clean == current.name) return;
-    final pet = current.rename(clean, DateTime.now());
-    state = state.copyWith(pet: pet);
     final client = ref.read(clientProvider);
-    await client.store.upsertPet(pet);
+    state = state.copyWith(busy: true, clearError: true);
     try {
-      await client.messages.sendPet(
-        chatId,
-        action: 'rename',
-        state: pet,
-        preview: 'Тамагочи',
-      );
+      await client.pets.rename(chatId, name);
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+    } finally {
+      if (ref.mounted) state = state.copyWith(busy: false);
+    }
+  }
+
+  Future<void> accept() async {
+    final id = state.record?.id;
+    if (id == null) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await ref.read(clientProvider).pets.accept(id);
+      await _load();
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+    } finally {
+      if (ref.mounted) state = state.copyWith(busy: false);
+    }
+  }
+
+  Future<void> decline() async {
+    final id = state.record?.id;
+    if (id == null) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await ref.read(clientProvider).pets.decline(id);
+      if (ref.mounted) {
+        state = state.copyWith(clearRecord: true, busy: false, loading: false);
+      }
+    } catch (error) {
+      if (ref.mounted) state = state.copyWith(error: '$error');
+    }
+  }
+
+  Future<void> release() async {
+    final id = state.record?.id;
+    if (id == null) return;
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await ref.read(clientProvider).pets.release(id);
+      if (ref.mounted) {
+        state = state.copyWith(clearRecord: true, busy: false, loading: false);
+      }
     } catch (error) {
       if (ref.mounted) state = state.copyWith(error: '$error');
     }
@@ -217,7 +178,6 @@ class PetController extends Notifier<PetUiState> {
   Future<void> refresh() => _load();
 }
 
-final petProvider =
-    NotifierProvider.family<PetController, PetUiState, String>(
+final petProvider = NotifierProvider.family<PetController, PetUiState, String>(
   PetController.new,
 );

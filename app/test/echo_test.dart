@@ -4,13 +4,13 @@ import 'package:coralink/services/echo.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Message _message(String id, String text, {String chat = 'bob'}) => Message(
-      id: id,
-      chatId: chat,
-      senderId: 'bob',
-      text: text,
-      status: MessageStatus.read,
-      createdAt: DateTime.now(),
-    );
+  id: id,
+  chatId: chat,
+  senderId: 'bob',
+  text: text,
+  status: MessageStatus.read,
+  createdAt: DateTime.now(),
+);
 
 void main() {
   test('echo finds messages by synonyms', () async {
@@ -36,14 +36,16 @@ void main() {
   test('echo ignores stop words and control messages', () async {
     final store = MemoryLocalStore();
     await store.upsertMessage(_message('1', 'Это просто сообщение'));
-    await store.upsertMessage(Message(
-      id: '2',
-      chatId: 'bob',
-      senderId: 'bob',
-      kind: MessageKind.reaction,
-      status: MessageStatus.read,
-      createdAt: DateTime.now(),
-    ));
+    await store.upsertMessage(
+      Message(
+        id: '2',
+        chatId: 'bob',
+        senderId: 'bob',
+        kind: MessageKind.reaction,
+        status: MessageStatus.read,
+        createdAt: DateTime.now(),
+      ),
+    );
     final echo = EchoSearch(store);
     final hits = await echo.search('и в на');
     expect(hits, isEmpty);
@@ -60,7 +62,9 @@ void main() {
       createdAt: DateTime.fromMillisecondsSinceEpoch(1700000000000),
       meta: const {'mime': 'image/png'},
       imageBase64: 'AAAA',
-      reactions: const {'💧': ['bob']},
+      reactions: const {
+        '💧': ['bob'],
+      },
       deleted: false,
     );
     final restored = Message.fromRow(message.toRow());

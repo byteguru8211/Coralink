@@ -165,6 +165,7 @@ function createHub({ db, config, logger }) {
     if (!recipient) {
       send(ws, {
         type: 'error',
+        id: event.id,
         code: 'recipient_not_found',
         message: 'Recipient not found',
       });
@@ -192,6 +193,7 @@ function createHub({ db, config, logger }) {
       ) {
         send(ws, {
           type: 'error',
+          id: event.id,
           code: 'duplicate_id',
           message: 'Message id is already in use',
         });
@@ -253,6 +255,7 @@ function createHub({ db, config, logger }) {
       sendToUser(event.chatWith, {
         type: 'message.read',
         messageIds: readIds,
+        ids: readIds,
         by: user.id,
       });
     }
@@ -281,6 +284,7 @@ function createHub({ db, config, logger }) {
     if (!db.isGroupMember(event.groupId, sender.id)) {
       send(ws, {
         type: 'error',
+        id: event.id,
         code: 'not_a_member',
         message: 'You are not a member of this group',
       });
@@ -290,7 +294,7 @@ function createHub({ db, config, logger }) {
     const memberIds = members.map((m) => m.id);
     const now = Date.now();
     const createdAt = event.createdAt === null ? now : event.createdAt;
-    db.insertGroupMessage({
+    const result = db.insertGroupMessage({
       id: event.id,
       groupId: event.groupId,
       senderId: sender.id,
@@ -301,6 +305,26 @@ function createHub({ db, config, logger }) {
       expiresAt: now + config.messageTtlMs,
       memberIds,
     });
+
+    if (!result.inserted) {
+      if (!result.message ||
+          result.message.senderId !== sender.id ||
+          result.message.groupId !== event.groupId) {
+        send(ws, {
+          type: 'error',
+          id: event.id,
+          code: 'duplicate_id',
+          message: 'Message id is already in use',
+        });
+        return;
+      }
+      send(ws, {
+        type: 'message.ack',
+        id: event.id,
+        status: 'queued',
+      });
+      return;
+    }
 
     let delivered = 0;
     for (const memberId of memberIds) {
@@ -328,7 +352,8 @@ function createHub({ db, config, logger }) {
 
   function handleGroupRead(ws, event) {
     const user = ws.coralinkUser;
-    const readIds = db.markGroupMessagesRead(user.id, event.ids, Date.now());
+    if (!db.isGroupMember(event.groupId, user.id)) return;
+    const readIds = db.markGroupMessagesRead(user.id, event.ids, Date.now(), event.groupId);
     if (readIds.length === 0) return;
     // Resolve senders for the read messages and fan out read receipts.
     const bySender = new Map();
@@ -343,6 +368,7 @@ function createHub({ db, config, logger }) {
         type: 'group.read',
         groupId: event.groupId,
         messageIds: ids,
+        ids,
         by: user.id,
       });
     }

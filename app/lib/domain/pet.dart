@@ -2,11 +2,9 @@ import 'dart:math' as math;
 
 /// Coralink Tamagotchi: one little reef companion per conversation.
 ///
-/// The pet is a shared, event-sourced creature. Every care action travels as an
-/// end-to-end encrypted `pet` message that carries the resulting state, so both
-/// people in a chat — and everybody in a group — grow the same companion
-/// without the relay ever learning anything about it. State is deterministic:
-/// given the same care events, every device reaches the same pet.
+/// The pet is a shared, event-sourced creature. Care actions are encrypted and
+/// ordered by the server, so every participant applies the same sequence without
+/// the relay learning the pet's name, species or statistics.
 enum PetSpecies { coral, lotus, seaweed, turtle, fish, crab }
 
 extension PetSpeciesInfo on PetSpecies {
@@ -15,7 +13,8 @@ extension PetSpeciesInfo on PetSpecies {
   String get id => name;
 
   /// Message key for the species name, e.g. `petSpeciesCoral`.
-  String get nameKey => 'petSpecies${name[0].toUpperCase()}${name.substring(1)}';
+  String get nameKey =>
+      'petSpecies${name[0].toUpperCase()}${name.substring(1)}';
 }
 
 PetSpecies? petSpeciesFromId(String? id) {
@@ -50,11 +49,11 @@ String petActionKey(PetAction action, PetSpecies species) {
 }
 
 String petActionIcon(PetAction action) => switch (action) {
-      PetAction.feed => 'water_drop',
-      PetAction.play => 'toys',
-      PetAction.care => 'favorite',
-      PetAction.sleep => 'bedtime',
-    };
+  PetAction.feed => 'water_drop',
+  PetAction.play => 'toys',
+  PetAction.care => 'favorite',
+  PetAction.sleep => 'bedtime',
+};
 
 enum PetStage { seed, sprout, young, adult }
 
@@ -133,11 +132,11 @@ class PetState {
   int get level => math.min(20, 1 + xp ~/ 50);
 
   int get nextStageXp => switch (stage) {
-        PetStage.seed => 30,
-        PetStage.sprout => 90,
-        PetStage.young => 200,
-        PetStage.adult => 200,
-      };
+    PetStage.seed => 30,
+    PetStage.sprout => 90,
+    PetStage.young => 200,
+    PetStage.adult => 200,
+  };
 
   double get stageProgress {
     final floorXp = switch (stage) {
@@ -193,10 +192,14 @@ class PetState {
   PetState tick(DateTime now) {
     final minutes = now.difference(lastTick).inMinutes;
     if (minutes <= 0) return this;
+    final hungerDrop = minutes ~/ 18;
+    final joyDrop = minutes ~/ 22;
+    final energyDrop = minutes ~/ 30;
+    if (hungerDrop == 0 && joyDrop == 0 && energyDrop == 0) return this;
     return copyWith(
-      hunger: clampStat(hunger - minutes ~/ 18),
-      joy: clampStat(joy - minutes ~/ 22),
-      energy: clampStat(energy - minutes ~/ 30),
+      hunger: clampStat(hunger - hungerDrop),
+      joy: clampStat(joy - joyDrop),
+      energy: clampStat(energy - energyDrop),
       lastTick: now,
       revision: revision,
     );
@@ -212,11 +215,11 @@ class PetState {
 
   /// True when the action would still do something meaningful.
   bool actionWouldHelp(PetAction action) => switch (action) {
-        PetAction.feed => hunger < 96,
-        PetAction.play => energy > 12 && joy < 98,
-        PetAction.care => joy < 98,
-        PetAction.sleep => energy < 96,
-      };
+    PetAction.feed => hunger < 96,
+    PetAction.play => energy > 12 && joy < 98,
+    PetAction.care => joy < 98,
+    PetAction.sleep => energy < 96,
+  };
 
   /// Applies one care action. Returns the same state when the cooldown has not
   /// elapsed, so duplicate taps and replayed messages are harmless.
@@ -267,10 +270,8 @@ class PetState {
     );
   }
 
-  PetState rename(String newName, DateTime now) => copyWith(
-        name: newName.trim(),
-        revision: now.millisecondsSinceEpoch,
-      );
+  PetState rename(String newName, DateTime now) =>
+      copyWith(name: newName.trim(), revision: now.millisecondsSinceEpoch);
 
   PetState copyWith({
     String? name,
@@ -282,74 +283,101 @@ class PetState {
     int? revision,
     Map<String, int>? actions,
     Map<String, int>? caretakers,
-  }) =>
-      PetState(
-        chatId: chatId,
-        species: species,
-        name: name ?? this.name,
-        bornAt: bornAt,
-        xp: xp ?? this.xp,
-        hunger: hunger ?? this.hunger,
-        joy: joy ?? this.joy,
-        energy: energy ?? this.energy,
-        lastTick: lastTick ?? this.lastTick,
-        revision: revision ?? this.revision,
-        adopterId: adopterId,
-        actions: actions ?? this.actions,
-        caretakers: caretakers ?? this.caretakers,
-      );
+  }) => PetState(
+    chatId: chatId,
+    species: species,
+    name: name ?? this.name,
+    bornAt: bornAt,
+    xp: xp ?? this.xp,
+    hunger: hunger ?? this.hunger,
+    joy: joy ?? this.joy,
+    energy: energy ?? this.energy,
+    lastTick: lastTick ?? this.lastTick,
+    revision: revision ?? this.revision,
+    adopterId: adopterId,
+    actions: actions ?? this.actions,
+    caretakers: caretakers ?? this.caretakers,
+  );
 
   /// Compact, wire-friendly form carried inside the encrypted pet message.
   Map<String, dynamic> toJson() => {
-        'v': 1,
-        'chatId': chatId,
-        'species': species.id,
-        'name': name,
-        'bornAt': bornAt.millisecondsSinceEpoch,
-        'xp': xp,
-        'hunger': hunger,
-        'joy': joy,
-        'energy': energy,
-        'lastTick': lastTick.millisecondsSinceEpoch,
-        'revision': revision,
-        'adopter': adopterId,
-        'actions': actions,
-        'caretakers': caretakers,
-      };
+    'v': 1,
+    'chatId': chatId,
+    'species': species.id,
+    'name': name,
+    'bornAt': bornAt.millisecondsSinceEpoch,
+    'xp': xp,
+    'hunger': hunger,
+    'joy': joy,
+    'energy': energy,
+    'lastTick': lastTick.millisecondsSinceEpoch,
+    'revision': revision,
+    'adopter': adopterId,
+    'actions': actions,
+    'caretakers': caretakers,
+  };
 
   static PetState? fromJson(Map<String, dynamic> json) {
+    if (json['v'] != null && json['v'] != 1) return null;
     final species = petSpeciesFromId(json['species'] as String?);
     final chatId = json['chatId'] as String?;
-    if (species == null || chatId == null || chatId.isEmpty) return null;
+    if (species == null ||
+        chatId == null ||
+        chatId.isEmpty ||
+        chatId.length > 160) {
+      return null;
+    }
+    final rawName = json['name'];
+    final name = rawName is String && rawName.trim().isNotEmpty
+        ? rawName.trim()
+        : 'Coral';
+    if (name.length > 24) return null;
     int stamp(Object? value, int fallback) =>
         value is num ? value.toInt() : fallback;
     final now = DateTime.now().millisecondsSinceEpoch;
+    final actions = _intMap(
+      json['actions'],
+      allowedKeys: PetAction.values.map((a) => a.name).toSet(),
+      maxValue: 9000000000000000,
+    );
+    final caretakers = _intMap(json['caretakers']);
+    if (actions.length > PetAction.values.length || caretakers.length > 256) {
+      return null;
+    }
     return PetState(
       chatId: chatId,
       species: species,
-      name: (json['name'] as String?)?.trim().isNotEmpty == true
-          ? json['name'] as String
-          : 'Coral',
+      name: name,
       bornAt: DateTime.fromMillisecondsSinceEpoch(stamp(json['bornAt'], now)),
-      xp: math.max(0, stamp(json['xp'], 0)),
+      xp: math.max(0, stamp(json['xp'], 0)).clamp(0, 1000000).toInt(),
       hunger: clampStat(stamp(json['hunger'], 60)),
       joy: clampStat(stamp(json['joy'], 60)),
       energy: clampStat(stamp(json['energy'], 60)),
       lastTick: DateTime.fromMillisecondsSinceEpoch(
         stamp(json['lastTick'], now),
       ),
-      revision: stamp(json['revision'], now),
+      revision: math.max(0, stamp(json['revision'], now)),
       adopterId: (json['adopter'] as String?) ?? '',
-      actions: _intMap(json['actions']),
-      caretakers: _intMap(json['caretakers']),
+      actions: actions,
+      caretakers: caretakers,
     );
   }
 
-  static Map<String, int> _intMap(Object? raw) {
+  static Map<String, int> _intMap(
+    Object? raw, {
+    Set<String>? allowedKeys,
+    int maxValue = 1000000,
+  }) {
     if (raw is! Map) return const {};
     final result = <String, int>{};
     raw.forEach((key, value) {
-      if (key is String && value is num) result[key] = value.toInt();
+      if (key is String &&
+          key.length <= 160 &&
+          (allowedKeys == null || allowedKeys.contains(key)) &&
+          value is num) {
+        final parsed = value.toInt().clamp(0, maxValue).toInt();
+        result[key] = parsed;
+      }
     });
     return result;
   }
@@ -366,4 +394,138 @@ PetState mergePet(PetState? current, PetState incoming) {
     return incoming;
   }
   return current;
+}
+
+enum PetScope { personal, direct, group }
+
+class PetMember {
+  const PetMember({
+    required this.userId,
+    required this.role,
+    required this.state,
+    required this.name,
+  });
+
+  final String userId;
+  final String role;
+  final String state;
+  final String name;
+
+  factory PetMember.fromJson(Map<String, dynamic> json) => PetMember(
+    userId: json['userId'] as String? ?? '',
+    role: json['role'] as String? ?? 'member',
+    state: json['state'] as String? ?? 'active',
+    name: json['name'] as String? ?? '',
+  );
+}
+
+class PetOperation {
+  const PetOperation({
+    required this.id,
+    required this.seq,
+    required this.actorId,
+    required this.action,
+    required this.payload,
+    required this.createdAt,
+  });
+
+  final String id;
+  final int seq;
+  final String actorId;
+  final String action;
+  final String payload;
+  final DateTime createdAt;
+
+  factory PetOperation.fromJson(Map<String, dynamic> json) => PetOperation(
+    id: json['id'] as String,
+    seq: (json['seq'] as num).toInt(),
+    actorId: json['actorId'] as String,
+    action: json['action'] as String,
+    payload: json['payload'] as String,
+    createdAt: DateTime.fromMillisecondsSinceEpoch(
+      (json['createdAt'] as num).toInt(),
+    ),
+  );
+}
+
+class PetRecord {
+  const PetRecord({
+    required this.id,
+    required this.scope,
+    required this.chatId,
+    required this.ownerId,
+    required this.status,
+    required this.membershipState,
+    required this.role,
+    required this.encryptedSnapshot,
+    required this.seq,
+    required this.members,
+    this.state,
+  });
+
+  final String id;
+  final PetScope scope;
+  final String chatId;
+  final String ownerId;
+  final String status;
+  final String membershipState;
+  final String role;
+  final String encryptedSnapshot;
+  final int seq;
+  final List<PetMember> members;
+  final PetState? state;
+
+  bool get isPending => status == 'pending';
+  bool get canCare =>
+      status == 'active' && membershipState == 'active' && state != null;
+  bool get isOwner => role == 'owner';
+
+  String localChatId(String myId) {
+    if (scope != PetScope.direct) return chatId;
+    return members
+        .firstWhere((m) => m.userId != myId, orElse: () => members.first)
+        .userId;
+  }
+
+  PetRecord copyWith({
+    String? id,
+    String? status,
+    String? membershipState,
+    PetState? state,
+    int? seq,
+  }) => PetRecord(
+    id: id ?? this.id,
+    scope: scope,
+    chatId: chatId,
+    ownerId: ownerId,
+    status: status ?? this.status,
+    membershipState: membershipState ?? this.membershipState,
+    role: role,
+    encryptedSnapshot: encryptedSnapshot,
+    seq: seq ?? this.seq,
+    members: members,
+    state: state ?? this.state,
+  );
+
+  factory PetRecord.fromJson(Map<String, dynamic> json) {
+    final scope = PetScope.values.firstWhere(
+      (value) => value.name == json['scope'],
+      orElse: () => PetScope.direct,
+    );
+    return PetRecord(
+      id: json['id'] as String,
+      scope: scope,
+      chatId: json['chatId'] as String,
+      ownerId: json['ownerId'] as String,
+      status: json['status'] as String? ?? 'active',
+      membershipState: json['membershipState'] as String? ?? 'active',
+      role: json['role'] as String? ?? 'member',
+      encryptedSnapshot: json['snapshot'] as String? ?? '',
+      seq: (json['seq'] as num?)?.toInt() ?? 0,
+      members: ((json['members'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((member) => PetMember.fromJson(member.cast<String, dynamic>()))
+          .toList(),
+    );
+  }
 }

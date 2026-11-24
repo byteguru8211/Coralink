@@ -12,6 +12,7 @@ import '../domain/models.dart';
 import 'dependencies.dart';
 import 'session.dart';
 import '../presentation/screens/auth_flow_screen.dart';
+import '../presentation/screens/call_screen.dart';
 import '../presentation/screens/chat_screen.dart';
 import '../presentation/screens/error_screen.dart';
 import '../presentation/screens/home_shell.dart';
@@ -27,7 +28,8 @@ class CoralinkApp extends ConsumerStatefulWidget {
   ConsumerState<CoralinkApp> createState() => _CoralinkAppState();
 }
 
-class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingObserver {
+class _CoralinkAppState extends ConsumerState<CoralinkApp>
+    with WidgetsBindingObserver {
   Timer? _idleTimer;
 
   @override
@@ -37,10 +39,21 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
     final notifications = ref.read(notificationProvider);
     notifications.onOpenChat = (chatId) {
       final state = ref.read(sessionProvider);
-      if (!state.isAuthenticated) return;
-      navigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)),
-      );
+      if (!state.isAuthenticated) {
+        notifications.pendingChatId = chatId;
+        return;
+      }
+      if (chatId.startsWith('call:')) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (_) => CallScreen(peerId: chatId.substring(5)),
+          ),
+        );
+      } else {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)),
+        );
+      }
     };
     // Initialize and, on Android/iOS, ask for the notification permission once
     // the first frame is on screen. Asking earlier can be ignored by the
@@ -72,19 +85,22 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
     switch (state) {
       case AppLifecycleState.resumed:
         session.setPresence('active');
+        ref.read(sessionProvider).client?.messages.setAppResumed(true);
         _resetIdle();
         unawaited(_ensureNotifications());
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
+        ref.read(sessionProvider).client?.messages.setAppResumed(false);
         session.setPresence('away');
     }
   }
 
   Future<void> _ensureNotifications() async {
     final notifications = ref.read(notificationProvider);
-    if (ref.read(settingsProvider).notificationMode == NotificationMode.offline) {
+    if (ref.read(settingsProvider).notificationMode ==
+        NotificationMode.offline) {
       return;
     }
     await notifications.init();
@@ -99,6 +115,12 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
       if (next.status == SessionStatus.unauthenticated ||
           next.status == SessionStatus.onboarding) {
         navigatorKey.currentState?.popUntil((route) => route.isFirst);
+      }
+      if (next.status == SessionStatus.authenticated &&
+          previous?.status != SessionStatus.authenticated) {
+        final notifications = ref.read(notificationProvider);
+        final chatId = notifications.consumePendingChat();
+        if (chatId != null) notifications.onOpenChat?.call(chatId);
       }
     });
     return MaterialApp(
@@ -119,7 +141,10 @@ class _CoralinkAppState extends ConsumerState<CoralinkApp> with WidgetsBindingOb
         final media = MediaQuery.of(context);
         return MediaQuery(
           data: media.copyWith(
-            textScaler: media.textScaler.clamp(minScaleFactor: 0.9, maxScaleFactor: 1.4),
+            textScaler: media.textScaler.clamp(
+              minScaleFactor: 0.9,
+              maxScaleFactor: 1.4,
+            ),
           ),
           child: child ?? const SizedBox.shrink(),
         );
@@ -141,19 +166,16 @@ class _AuthGate extends ConsumerWidget {
       SessionStatus.onboarding => ProfileSetupScreen(user: session.user!),
       SessionStatus.authenticated => const HomeShell(),
       SessionStatus.error => ErrorScreen(
-          message: session.message ?? '',
-          onRetry: () => ref.read(sessionProvider.notifier).retryRestore(),
-          onSignOut: () => ref.read(sessionProvider.notifier).logout(),
-        ),
+        message: session.message ?? '',
+        onRetry: () => ref.read(sessionProvider.notifier).retryRestore(),
+        onSignOut: () => ref.read(sessionProvider.notifier).logout(),
+      ),
     };
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 450),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
-      child: KeyedSubtree(
-        key: ValueKey(session.status),
-        child: widget,
-      ),
+      child: KeyedSubtree(key: ValueKey(session.status), child: widget),
     );
   }
 }

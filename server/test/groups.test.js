@@ -93,6 +93,8 @@ test('group message is delivered live to online members and queued for offline',
     body: { ids: [msgId] },
   });
   assert.strictEqual(ackRes.body.acked, 1);
+  const receipt = await aliceWs.waitFor('message.delivered');
+  assert.deepStrictEqual(receipt.ids, [msgId]);
   const after = await app.api('/api/v1/groups/queued', { token: carol.token });
   assert.ok(!after.body.messages.some((m) => m.id === msgId));
 });

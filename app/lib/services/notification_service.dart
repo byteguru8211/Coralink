@@ -7,8 +7,8 @@ import '../core/app_colors.dart';
 import '../core/log.dart';
 import '../data/settings_store.dart';
 
-/// Four notification modes from the product spec. Android channels carry the
-/// behavioural difference; iOS uses interruption levels where available.
+/// Three notification modes: standard, silent and off. Android channels carry
+/// the behavioural difference; iOS uses interruption levels where available.
 ///
 /// Channel ids carry a version suffix on purpose: Android freezes a channel's
 /// importance/sound the first time it is created, and a channel created by an
@@ -18,6 +18,13 @@ class NotificationService {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
   void Function(String chatId)? onOpenChat;
+  String? pendingChatId;
+
+  String? consumePendingChat() {
+    final value = pendingChatId;
+    pendingChatId = null;
+    return value;
+  }
 
   bool get _supported =>
       !kIsWeb &&
@@ -28,15 +35,15 @@ class NotificationService {
   static const _appUserModelId = 'com.coralink.app';
   static const _windowsGuid = '7c1f2a4b-9d3e-4c58-8a61-2b0f5e7d9c13';
 
-  static const _minimalChannelId = 'coralink_minimal_v2';
-  static const _mediumChannelId = 'coralink_medium_v2';
-  static const _advancedChannelId = 'coralink_advanced_v2';
+  static const _minimalChannelId = 'coralink_silent_v3';
+  static const _mediumChannelId = 'coralink_standard_v3';
+  static const _callChannelId = 'coralink_calls_v3';
 
   static const _minimalChannel = AndroidNotificationChannel(
     _minimalChannelId,
-    'Coralink · minimal',
-    description: 'Vibration only, no sound',
-    importance: Importance.low,
+    'Coralink · без звука',
+    description: 'Уведомления без звука',
+    importance: Importance.high,
     playSound: false,
     enableVibration: true,
     enableLights: false,
@@ -44,18 +51,18 @@ class NotificationService {
 
   static const _mediumChannel = AndroidNotificationChannel(
     _mediumChannelId,
-    'Coralink · gentle',
-    description: 'Sound and a notification in the shade',
+    'Coralink · со звуком',
+    description: 'Звук и вибрация',
     importance: Importance.high,
     playSound: true,
     enableVibration: true,
     enableLights: false,
   );
 
-  static const _advancedChannel = AndroidNotificationChannel(
-    _advancedChannelId,
-    'Coralink · extended',
-    description: 'Heads-up notifications with sound and vibration',
+  static const _callChannel = AndroidNotificationChannel(
+    _callChannelId,
+    'Coralink · звонки',
+    description: 'Входящие звонки',
     importance: Importance.max,
     playSound: true,
     enableVibration: true,
@@ -84,15 +91,30 @@ class NotificationService {
         ),
         onDidReceiveNotificationResponse: (response) {
           final chatId = response.payload;
-          if (chatId != null && chatId.isNotEmpty) onOpenChat?.call(chatId);
+          if (chatId != null &&
+              chatId.isNotEmpty &&
+              chatId != 'coralink-test') {
+            onOpenChat?.call(chatId);
+          }
         },
       );
+      final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+      if (launchDetails?.didNotificationLaunchApp == true) {
+        final payload = launchDetails!.notificationResponse?.payload;
+        if (payload != null &&
+            payload.isNotEmpty &&
+            payload != 'coralink-test') {
+          pendingChatId = payload;
+        }
+      }
       if (defaultTargetPlatform == TargetPlatform.android) {
-        final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+        final androidPlugin = _plugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
         await androidPlugin?.createNotificationChannel(_minimalChannel);
         await androidPlugin?.createNotificationChannel(_mediumChannel);
-        await androidPlugin?.createNotificationChannel(_advancedChannel);
+        await androidPlugin?.createNotificationChannel(_callChannel);
       }
       _ready = true;
     } catch (error) {
@@ -108,7 +130,8 @@ class NotificationService {
       try {
         return await _plugin
                 .resolvePlatformSpecificImplementation<
-                    AndroidFlutterLocalNotificationsPlugin>()
+                  AndroidFlutterLocalNotificationsPlugin
+                >()
                 ?.areNotificationsEnabled() ??
             false;
       } catch (error) {
@@ -119,7 +142,8 @@ class NotificationService {
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       final options = await _plugin
           .resolvePlatformSpecificImplementation<
-              IOSFlutterLocalNotificationsPlugin>()
+            IOSFlutterLocalNotificationsPlugin
+          >()
           ?.checkPermissions();
       return options?.isEnabled ?? false;
     }
@@ -133,17 +157,21 @@ class NotificationService {
     if (!_ready) await init();
     try {
       if (defaultTargetPlatform == TargetPlatform.android) {
-        final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+        final androidPlugin = _plugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
         if (await androidPlugin?.areNotificationsEnabled() == true) return true;
         final granted =
             await androidPlugin?.requestNotificationsPermission() ?? false;
         return granted || (await areEnabled());
       }
       if (defaultTargetPlatform == TargetPlatform.iOS) {
-        final granted = await _plugin
+        final granted =
+            await _plugin
                 .resolvePlatformSpecificImplementation<
-                    IOSFlutterLocalNotificationsPlugin>()
+                  IOSFlutterLocalNotificationsPlugin
+                >()
                 ?.requestPermissions(alert: true, badge: true, sound: true) ??
             false;
         return granted;
@@ -183,10 +211,10 @@ class NotificationService {
         payload: chatId,
         notificationDetails: NotificationDetails(
           android: details,
-          iOS: const DarwinNotificationDetails(
+          iOS: DarwinNotificationDetails(
             presentAlert: true,
             presentBadge: true,
-            presentSound: true,
+            presentSound: mode != NotificationMode.minimal,
           ),
           windows: const WindowsNotificationDetails(),
         ),
@@ -199,7 +227,8 @@ class NotificationService {
   /// Fires a notification with the current mode so the user can verify their
   /// choice immediately, without waiting for a message.
   Future<void> showTest(NotificationMode mode) {
-    final english = WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'en';
+    final english =
+        WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'en';
     return show(
       chatId: 'coralink-test',
       title: english ? 'Coralink is listening' : 'Coralink на связи',
@@ -212,47 +241,74 @@ class NotificationService {
 
   AndroidNotificationDetails _detailsFor(NotificationMode mode, String body) =>
       switch (mode) {
-        NotificationMode.minimal => const AndroidNotificationDetails(
-            _minimalChannelId,
-            'Coralink · minimal',
-            channelDescription: 'Vibration only, no sound',
-            importance: Importance.low,
-            priority: Priority.low,
-            playSound: false,
-            enableVibration: true,
-            enableLights: false,
-            color: BrandColors.emerald,
-            category: AndroidNotificationCategory.message,
-          ),
-        NotificationMode.advanced => AndroidNotificationDetails(
-            _advancedChannelId,
-            'Coralink · extended',
-            channelDescription: 'Heads-up notifications with sound and vibration',
+        NotificationMode.minimal => AndroidNotificationDetails(
+          _minimalChannelId,
+          'Coralink · без звука',
+          channelDescription: 'Уведомления без звука',
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: false,
+          enableVibration: true,
+          enableLights: false,
+          color: BrandColors.emerald,
+          category: AndroidNotificationCategory.message,
+          visibility: NotificationVisibility.public,
+          styleInformation: BigTextStyleInformation(body),
+        ),
+        _ => AndroidNotificationDetails(
+          _mediumChannelId,
+          'Coralink · со звуком',
+          channelDescription: 'Звук и вибрация',
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          enableLights: false,
+          color: BrandColors.emerald,
+          category: AndroidNotificationCategory.message,
+          visibility: NotificationVisibility.public,
+          styleInformation: BigTextStyleInformation(body),
+        ),
+      };
+
+  Future<void> showCall({required String peerId, required String name}) async {
+    if (!_ready) return;
+    try {
+      await _plugin.show(
+        id: 256,
+        title: name,
+        body: 'Входящий звонок',
+        payload: 'call:$peerId',
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            _callChannelId,
+            'Coralink · звонки',
+            channelDescription: 'Входящие звонки',
             importance: Importance.max,
             priority: Priority.max,
             playSound: true,
             enableVibration: true,
             enableLights: false,
             color: BrandColors.emerald,
-            category: AndroidNotificationCategory.message,
+            category: AndroidNotificationCategory.call,
             visibility: NotificationVisibility.public,
-            styleInformation: BigTextStyleInformation(body),
+            fullScreenIntent: true,
           ),
-        _ => AndroidNotificationDetails(
-            _mediumChannelId,
-            'Coralink · gentle',
-            channelDescription: 'Sound and a notification in the shade',
-            importance: Importance.high,
-            priority: Priority.high,
-            playSound: true,
-            enableVibration: true,
-            enableLights: false,
-            color: BrandColors.emerald,
-            category: AndroidNotificationCategory.message,
-            visibility: NotificationVisibility.public,
-            styleInformation: BigTextStyleInformation(body),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            interruptionLevel: InterruptionLevel.timeSensitive,
           ),
-      };
+          windows: const WindowsNotificationDetails(),
+        ),
+      );
+    } catch (error) {
+      Log.e('notifications.call', error);
+    }
+  }
+
+  Future<void> cancelCall() => _plugin.cancel(id: 256);
 
   Future<void> cancelAll() => _plugin.cancelAll();
 }

@@ -9,11 +9,17 @@ import '../domain/models.dart';
 import '../network/call.dart';
 import '../network/realtime.dart';
 import '../security/key_backup.dart';
-import '../services/keep_alive.dart';
+import '../security/signal_service.dart';
 import 'client_bundle.dart';
 import 'dependencies.dart';
 
-enum SessionStatus { booting, unauthenticated, onboarding, authenticated, error }
+enum SessionStatus {
+  booting,
+  unauthenticated,
+  onboarding,
+  authenticated,
+  error,
+}
 
 class SessionState {
   const SessionState({
@@ -38,6 +44,7 @@ class SessionController extends Notifier<SessionState> {
   // Held only for the duration of a login/registration so the encrypted key
   // backup can be derived and (re)uploaded; never persisted to disk.
   String? _sessionPassword;
+  bool _allowCreateIdentity = false;
 
   @override
   SessionState build() {
@@ -62,6 +69,13 @@ class SessionController extends Notifier<SessionState> {
       api.close();
       await store.upsertUser(user);
       await secure.setToken(token);
+      if (await secure.readSignalState(user.id) == null) {
+        try {
+          await api.fetchKeyInfo(user.id);
+        } on ApiException catch (error) {
+          if (error.statusCode == 404) _allowCreateIdentity = true;
+        }
+      }
       await _activate(user, token);
     } on ApiException catch (error) {
       api.close();
@@ -104,19 +118,23 @@ class SessionController extends Notifier<SessionState> {
     required String password,
     String? name,
   }) async {
-    final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
+    final api = ApiClient(
+      baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl,
+    );
     try {
       final auth = await api.register(username, password: password, name: name);
       _sessionPassword = password;
       await ref.read(secureStoreProvider).setToken(auth.token);
       await ref.read(localStoreProvider).upsertUser(auth.user);
       if (auth.isNew) {
+        _allowCreateIdentity = true;
         state = SessionState(
           status: SessionStatus.onboarding,
           user: auth.user,
           pendingToken: auth.token,
         );
       } else {
+        _allowCreateIdentity = false;
         await _activate(auth.user, auth.token);
       }
     } finally {
@@ -125,10 +143,13 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> login(String username, String password) async {
-    final api = ApiClient(baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl);
+    final api = ApiClient(
+      baseUrl: ref.read(effectiveConfigProvider).apiBaseUrl,
+    );
     try {
       final auth = await api.login(username, password);
       _sessionPassword = password;
+      _allowCreateIdentity = false;
       await ref.read(secureStoreProvider).setToken(auth.token);
       await ref.read(localStoreProvider).upsertUser(auth.user);
       // Restore the encrypted key backup (if any) BEFORE SignalService.load so
@@ -145,20 +166,42 @@ class SessionController extends Notifier<SessionState> {
     String userId,
     String password,
   ) async {
+    final secure = ref.read(secureStoreProvider);
+    final hasLocalState = await secure.readSignalState(userId) != null;
     try {
       final backup = await api.fetchBackup();
-      if (backup == null) return;
-      final restored = await KeyBackup(ref.read(secureStoreProvider)).restore(
+      if (backup == null) {
+        if (!hasLocalState) {
+          throw EncryptionException(
+            'missing_backup',
+            'No encryption keys or encrypted backup are available for this account',
+          );
+        }
+        return;
+      }
+      final restored = await KeyBackup(secure).restore(
         userId: userId,
         password: password,
         blob: backup.blob,
         salt: backup.salt,
       );
       if (!restored) {
-        Log.d('backup', 'Backup present but password did not decrypt it');
+        throw EncryptionException(
+          'backup_password',
+          'The encryption backup could not be decrypted with this password',
+        );
       }
+    } on ApiException {
+      if (hasLocalState) return;
+      rethrow;
+    } on EncryptionException {
+      rethrow;
     } catch (error) {
-      Log.d('backup', 'Restore skipped: $error');
+      if (hasLocalState) return;
+      throw EncryptionException(
+        'backup_failed',
+        'Could not restore encryption keys',
+      );
     }
   }
 
@@ -170,14 +213,22 @@ class SessionController extends Notifier<SessionState> {
       await backup.primeKeyFromPassword(password);
       final built = await backup.build(userId);
       if (built != null) {
-        await bundle.api.uploadBackup(blob: built.blob, salt: built.salt);
+        await bundle.api.uploadBackup(
+          blob: built.blob,
+          salt: built.salt,
+          revision: built.revision,
+        );
       }
     } catch (error) {
       Log.d('backup', 'Backup upload deferred: $error');
     }
   }
 
-  Future<void> completeProfile(String name, String about, String avatarColor) async {
+  Future<void> completeProfile(
+    String name,
+    String about,
+    String avatarColor,
+  ) async {
     final token = state.pendingToken;
     if (token == null) throw StateError('No pending session');
     final api = ApiClient(
@@ -223,7 +274,8 @@ class SessionController extends Notifier<SessionState> {
 
   Future<void> refreshProfile() async {
     final client = state.client;
-    final token = state.pendingToken ?? await ref.read(secureStoreProvider).token;
+    final token =
+        state.pendingToken ?? await ref.read(secureStoreProvider).token;
     if (client == null || token == null) return;
     final user = await client.api.me();
     await client.store.upsertUser(user);
@@ -244,6 +296,7 @@ class SessionController extends Notifier<SessionState> {
       user: user,
       archiveDays: ref.read(settingsProvider).autoArchiveDays,
       presenceScope: ref.read(settingsProvider).privacyScope.name,
+      allowCreateIdentity: _allowCreateIdentity,
     );
     state = SessionState(
       status: SessionStatus.authenticated,
@@ -251,13 +304,8 @@ class SessionController extends Notifier<SessionState> {
       client: bundle,
       pendingToken: token,
     );
-    // The optional Android background service is opt-in: it keeps a permanent
-    // notification, so it only runs when the user asked for it in settings.
-    if (ref.read(settingsProvider).backgroundAlive) {
-      unawaited(startKeepAlive());
-    } else {
-      unawaited(stopKeepAlive());
-    }
+    // Notifications are delivered while the app process is alive; no permanent
+    // foreground service is promised.
     unawaited(_syncBackup(bundle, user.id));
   }
 
@@ -285,7 +333,6 @@ class SessionController extends Notifier<SessionState> {
     await ref.read(localStoreProvider).clearUserData();
     ref.read(audioProvider).stopPresence();
     await ref.read(notificationProvider).cancelAll();
-    await stopKeepAlive();
     state = const SessionState(status: SessionStatus.unauthenticated);
   }
 
@@ -301,7 +348,9 @@ class SessionController extends Notifier<SessionState> {
       while (payload.length % 4 != 0) {
         payload += '=';
       }
-      final decoded = jsonDecode(utf8.decode(base64Decode(payload))) as Map<String, dynamic>;
+      final decoded =
+          jsonDecode(utf8.decode(base64Decode(payload)))
+              as Map<String, dynamic>;
       return decoded['sub'] as String?;
     } catch (error) {
       Log.d('session', 'Bad JWT: $error');
@@ -310,8 +359,9 @@ class SessionController extends Notifier<SessionState> {
   }
 }
 
-final sessionProvider =
-    NotifierProvider<SessionController, SessionState>(SessionController.new);
+final sessionProvider = NotifierProvider<SessionController, SessionState>(
+  SessionController.new,
+);
 
 final clientProvider = Provider<ClientBundle>((ref) {
   final session = ref.watch(sessionProvider);

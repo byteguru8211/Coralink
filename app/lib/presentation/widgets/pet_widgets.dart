@@ -41,21 +41,25 @@ class PetEventChip extends StatelessWidget {
     final species = pet?.species ?? PetSpecies.coral;
     final name = pet?.name ?? strings.get('petDefaultName');
     final label = switch (action) {
-      'adopt' => strings
-          .get('petEventAdopt')
-          .replaceAll('{name}', name)
-          .replaceAll('{species}', strings.get(species.nameKey)),
+      'adopt' =>
+        strings
+            .get('petEventAdopt')
+            .replaceAll('{name}', name)
+            .replaceAll('{species}', strings.get(species.nameKey)),
       'rename' => strings.get('petEventRename').replaceAll('{name}', name),
-      _ => strings
-          .get('petEventCare')
-          .replaceAll(
-            '{action}',
-            strings.get(petActionKey(
-              petActionFromId(action) ?? PetAction.care,
-              species,
-            )),
-          )
-          .replaceAll('{name}', name),
+      _ =>
+        strings
+            .get('petEventCare')
+            .replaceAll(
+              '{action}',
+              strings.get(
+                petActionKey(
+                  petActionFromId(action) ?? PetAction.care,
+                  species,
+                ),
+              ),
+            )
+            .replaceAll('{name}', name),
     };
     final accent = mine ? palette.accentSoft : palette.accent;
     return Align(
@@ -82,7 +86,8 @@ class PetEventChip extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 PetPortrait(
-                  pet: pet ??
+                  pet:
+                      pet ??
                       PetState.adopt(
                         chatId: message.chatId,
                         species: species,
@@ -116,19 +121,21 @@ class PetEventChip extends StatelessWidget {
   }
 }
 
-/// The shared pet card above the composer: a living portrait, growth stage,
-/// wellbeing and the four care actions. Everything here is shared by the chat
-/// (or group) and synchronised through encrypted pet messages.
+/// The pet card above the composer: a living portrait, growth stage,
+/// wellbeing and the four care actions. Shared state is synchronized through
+/// encrypted server operations.
 class PetPanel extends ConsumerStatefulWidget {
   const PetPanel({
     super.key,
     required this.chatId,
     required this.strings,
     this.expandToken = 0,
+    this.personal = false,
   });
 
   final String chatId;
   final AppStrings strings;
+  final bool personal;
 
   /// Bumped by the chat screen when a pet event in the timeline is tapped, so
   /// the card opens instead of staying folded.
@@ -142,6 +149,7 @@ class _PetPanelState extends ConsumerState<PetPanel> {
   bool _expanded = false;
   Timer? _clock;
   int _reaction = 0;
+  ProviderContainer? _container;
 
   // Adoption form.
   bool _animal = false;
@@ -151,9 +159,16 @@ class _PetPanelState extends ConsumerState<PetPanel> {
   @override
   void initState() {
     super.initState();
+    _expanded = widget.personal;
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _expanded) setState(() {});
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _container ??= ProviderScope.containerOf(context);
   }
 
   @override
@@ -168,6 +183,7 @@ class _PetPanelState extends ConsumerState<PetPanel> {
   void dispose() {
     _clock?.cancel();
     _name.dispose();
+    _container?.invalidate(petProvider(widget.chatId));
     super.dispose();
   }
 
@@ -175,8 +191,8 @@ class _PetPanelState extends ConsumerState<PetPanel> {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final state = ref.watch(petProvider(widget.chatId));
+    final record = state.record;
     final pet = state.pet;
-    if (pet == null && state.loading) return const SizedBox.shrink();
     final accent = palette.accent;
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
@@ -199,119 +215,147 @@ class _PetPanelState extends ConsumerState<PetPanel> {
           ),
         ],
       ),
-      child: AnimatedSize(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-        alignment: Alignment.bottomCenter,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () => setState(() => _expanded = !_expanded),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 12, 8),
-                child: Row(
-                  children: [
-                    if (pet != null)
-                      PetPortrait(
-                        pet: pet,
-                        size: 42,
-                        animate: _expanded,
-                        reaction: _reaction,
-                      )
-                    else
-                      Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: accent.withValues(alpha: 0.14),
-                        ),
-                        child: Icon(Icons.eco_rounded, color: accent, size: 21),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 12, 8),
+              child: Row(
+                children: [
+                  if (pet != null)
+                    PetPortrait(
+                      pet: pet,
+                      size: 42,
+                      animate: _expanded,
+                      reaction: _reaction,
+                    )
+                  else
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: accent.withValues(alpha: 0.14),
                       ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  pet?.name ??
-                                      widget.strings.get('petStartTitle'),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: palette.textPrimary,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                      child: Icon(Icons.eco_rounded, color: accent, size: 21),
+                    ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                pet?.name ??
+                                    (record?.isPending == true
+                                        ? widget.strings.get('petInviteTitle')
+                                        : widget.personal
+                                        ? widget.strings.get('petPersonalTitle')
+                                        : widget.strings.get('petStartTitle')),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: palette.textPrimary,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              if (pet != null) ...[
-                                const SizedBox(width: 6),
-                                _Pill(
-                                  label: widget.strings
-                                      .get(petStageKey(pet.stage, pet.species)),
-                                  color: accent,
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            pet == null
-                                ? widget.strings.get('petStartHint')
-                                : '${widget.strings.get('petLevel')} ${pet.level}'
-                                    ' · ${_wellbeingLabel(pet)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: palette.textMuted,
-                              fontSize: 11.5,
                             ),
+                            if (pet != null) ...[
+                              const SizedBox(width: 6),
+                              _Pill(
+                                label: widget.strings.get(
+                                  petStageKey(pet.stage, pet.species),
+                                ),
+                                color: accent,
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          pet == null
+                              ? record?.isPending == true
+                                    ? widget.strings.get('petWaiting')
+                                    : widget.personal
+                                    ? widget.strings.get('petPersonalHint')
+                                    : widget.strings.get('petStartHint')
+                              : '${widget.strings.get('petLevel')} ${pet.level}'
+                                    ' · ${_wellbeingLabel(pet)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: palette.textMuted,
+                            fontSize: 11.5,
                           ),
-                        ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (pet != null && _expanded)
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: widget.strings.get('petRename'),
+                      onPressed: state.busy ? null : () => _rename(pet),
+                      icon: Icon(
+                        Icons.edit_outlined,
+                        size: 17,
+                        color: palette.textMuted,
                       ),
                     ),
-                    if (pet != null && _expanded)
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        tooltip: widget.strings.get('petRename'),
-                        onPressed: () => _rename(pet),
-                        icon: Icon(Icons.edit_outlined,
-                            size: 17, color: palette.textMuted),
+                  if (record != null && _expanded)
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: widget.strings.get('petRelease'),
+                      onPressed: state.busy ? null : _release,
+                      icon: Icon(
+                        Icons.close_rounded,
+                        size: 17,
+                        color: palette.textMuted,
                       ),
-                    Icon(
-                      _expanded
-                          ? Icons.keyboard_arrow_down_rounded
-                          : Icons.keyboard_arrow_up_rounded,
-                      color: palette.textMuted,
                     ),
-                  ],
-                ),
+                  Icon(
+                    _expanded
+                        ? Icons.keyboard_arrow_down_rounded
+                        : Icons.keyboard_arrow_up_rounded,
+                    color: palette.textMuted,
+                  ),
+                ],
               ),
             ),
-            if (_expanded)
-              SizedBox(
-                // A fixed, bounded height is essential here: the card lives in
-                // an AnimatedSize with loose constraints, and an unbounded
-                // SingleChildScrollView cannot be laid out inside it.
-                height: math.min(
-                  344,
-                  MediaQuery.sizeOf(context).height * 0.42,
-                ),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: pet == null
+          ),
+          if (_expanded)
+            SizedBox(
+              height: math.min(344, MediaQuery.sizeOf(context).height * 0.42),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: record?.isPending == true
+                    ? _InviteContent(
+                        strings: widget.strings,
+                        busy: state.busy,
+                        invited: record!.membershipState == 'pending',
+                        onAccept: () => ref
+                            .read(petProvider(widget.chatId).notifier)
+                            .accept(),
+                        onDecline: () => ref
+                            .read(petProvider(widget.chatId).notifier)
+                            .decline(),
+                      )
+                    : pet == null
                     ? _AdoptForm(
                         strings: widget.strings,
                         animal: _animal,
                         species: _species,
                         name: _name,
                         busy: state.busy,
+                        actionLabel: widget.strings.get(
+                          widget.personal ? 'petAdopt' : 'petInvite',
+                        ),
                         onKind: (animal) => setState(() {
                           _animal = animal;
                           _species = animal
@@ -326,14 +370,46 @@ class _PetPanelState extends ConsumerState<PetPanel> {
                         pet: pet,
                         strings: widget.strings,
                         reaction: _reaction,
+                        busy: state.busy,
                         onAction: _care,
                       ),
-                ),
               ),
-          ],
-        ),
+            ),
+          if (state.error != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Text(
+                state.error!,
+                style: TextStyle(color: palette.coral, fontSize: 11.5),
+              ),
+            ),
+        ],
       ),
     );
+  }
+
+  Future<void> _release() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: context.palette.surface,
+        title: Text(widget.strings.get('petRelease')),
+        content: Text(widget.strings.get('petReleaseConfirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(widget.strings.get('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(widget.strings.get('petRelease')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(petProvider(widget.chatId).notifier).release();
+    }
   }
 
   String _wellbeingLabel(PetState pet) {
@@ -344,7 +420,9 @@ class _PetPanelState extends ConsumerState<PetPanel> {
 
   Future<void> _adopt() async {
     final name = _name.text.trim();
-    await ref.read(petProvider(widget.chatId).notifier).adopt(
+    await ref
+        .read(petProvider(widget.chatId).notifier)
+        .adopt(
           _species,
           name.isEmpty ? widget.strings.get(_species.nameKey) : name,
         );
@@ -370,9 +448,7 @@ class _PetPanelState extends ConsumerState<PetPanel> {
           controller: controller,
           autofocus: true,
           maxLength: 24,
-          decoration: InputDecoration(
-            labelText: widget.strings.get('petName'),
-          ),
+          decoration: InputDecoration(labelText: widget.strings.get('petName')),
         ),
         actions: [
           TextButton(
@@ -393,6 +469,69 @@ class _PetPanelState extends ConsumerState<PetPanel> {
   }
 }
 
+class _InviteContent extends StatelessWidget {
+  const _InviteContent({
+    required this.strings,
+    required this.busy,
+    required this.invited,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  final AppStrings strings;
+  final bool busy;
+  final bool invited;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 12),
+        Icon(Icons.mark_email_unread_rounded, size: 34, color: palette.accent),
+        const SizedBox(height: 10),
+        Text(
+          strings.get(invited ? 'petInviteHint' : 'petInviteSent'),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: palette.textPrimary,
+            fontSize: 13,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (invited)
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: busy ? null : onDecline,
+                  child: Text(strings.get('petDecline')),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  onPressed: busy ? null : onAccept,
+                  child: Text(strings.get('petAccept')),
+                ),
+              ),
+            ],
+          )
+        else
+          LinearProgressIndicator(
+            minHeight: 2,
+            backgroundColor: palette.divider,
+            valueColor: AlwaysStoppedAnimation(palette.accent),
+          ),
+      ],
+    );
+  }
+}
+
 class _Pill extends StatelessWidget {
   const _Pill({required this.label, required this.color});
   final String label;
@@ -400,21 +539,21 @@ class _Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: 9.5,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.14),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: color.withValues(alpha: 0.4)),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(
+        color: color,
+        fontSize: 9.5,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
 }
 
 class _CareContent extends StatelessWidget {
@@ -423,12 +562,14 @@ class _CareContent extends StatelessWidget {
     required this.strings,
     required this.reaction,
     required this.onAction,
+    this.busy = false,
   });
 
   final PetState pet;
   final AppStrings strings;
   final int reaction;
   final ValueChanged<PetAction> onAction;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -468,8 +609,11 @@ class _CareContent extends StatelessWidget {
                 left: 10,
                 child: Row(
                   children: [
-                    Icon(Icons.groups_rounded,
-                        size: 13, color: palette.textMuted),
+                    Icon(
+                      Icons.groups_rounded,
+                      size: 13,
+                      color: palette.textMuted,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       strings
@@ -548,7 +692,7 @@ class _CareContent extends StatelessWidget {
                   action: action,
                   strings: strings,
                   now: now,
-                  onTap: () => onAction(action),
+                  onTap: busy ? null : () => onAction(action),
                 ),
               ),
               if (action != PetAction.values.last) const SizedBox(width: 6),
@@ -631,7 +775,7 @@ class _ActionButton extends StatelessWidget {
   final PetAction action;
   final AppStrings strings;
   final DateTime now;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   IconData get _icon {
     if (action == PetAction.care) return Icons.volunteer_activism_rounded;
@@ -664,9 +808,7 @@ class _ActionButton extends StatelessWidget {
           color: color.withValues(alpha: cooling ? 0.05 : 0.12),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: cooling
-                ? palette.divider
-                : color.withValues(alpha: 0.35),
+            color: cooling ? palette.divider : color.withValues(alpha: 0.35),
           ),
         ),
         child: Column(
@@ -703,6 +845,7 @@ class _AdoptForm extends StatelessWidget {
     required this.onKind,
     required this.onSpecies,
     required this.onAdopt,
+    required this.actionLabel,
   });
 
   final AppStrings strings;
@@ -713,6 +856,7 @@ class _AdoptForm extends StatelessWidget {
   final ValueChanged<bool> onKind;
   final ValueChanged<PetSpecies> onSpecies;
   final VoidCallback onAdopt;
+  final String actionLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -767,7 +911,9 @@ class _AdoptForm extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          strings.get(isAnimal ? 'petKindAnimal' : 'petKindPlant'),
+                          strings.get(
+                            isAnimal ? 'petKindAnimal' : 'petKindPlant',
+                          ),
                           style: TextStyle(
                             color: animal == isAnimal
                                 ? palette.textPrimary
@@ -851,22 +997,29 @@ class _AdoptForm extends StatelessWidget {
                   hintText: strings.get('petNameHint'),
                   counterText: '',
                   isDense: true,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
-            FilledButton(
-              onPressed: busy ? null : onAdopt,
-              style: FilledButton.styleFrom(
-                backgroundColor: palette.accent,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              ),
-              child: Text(
-                strings.get('petAdopt'),
-                style: const TextStyle(fontSize: 12.5),
+            SizedBox(
+              width: 150,
+              child: FilledButton(
+                onPressed: busy ? null : onAdopt,
+                style: FilledButton.styleFrom(
+                  backgroundColor: palette.accent,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                ),
+                child: Text(
+                  actionLabel,
+                  style: const TextStyle(fontSize: 12.5),
+                ),
               ),
             ),
           ],
@@ -1020,10 +1173,7 @@ class _PetPainter extends CustomPainter {
   void _scene(Canvas canvas) {
     final glow = Paint()
       ..shader = RadialGradient(
-        colors: [
-          _emerald.withValues(alpha: 0.20),
-          Colors.transparent,
-        ],
+        colors: [_emerald.withValues(alpha: 0.20), Colors.transparent],
       ).createShader(const Rect.fromLTWH(8, 8, 104, 104));
     canvas.drawCircle(const Offset(60, 62), 54, glow);
     canvas.drawOval(
@@ -1046,19 +1196,15 @@ class _PetPainter extends CustomPainter {
   }
 
   void _sparkles(Canvas canvas) {
-    for (final offset in const [Offset(26, 38), Offset(96, 52), Offset(86, 26)]) {
+    for (final offset in const [
+      Offset(26, 38),
+      Offset(96, 52),
+      Offset(86, 26),
+    ]) {
       final alpha = 0.35 + 0.35 * math.sin(t * math.pi * 4 + offset.dx);
       final paint = _stroke(_gold.withValues(alpha: alpha), 1.4);
-      canvas.drawLine(
-        offset.translate(-3, 0),
-        offset.translate(3, 0),
-        paint,
-      );
-      canvas.drawLine(
-        offset.translate(0, -3),
-        offset.translate(0, 3),
-        paint,
-      );
+      canvas.drawLine(offset.translate(-3, 0), offset.translate(3, 0), paint);
+      canvas.drawLine(offset.translate(0, -3), offset.translate(0, 3), paint);
     }
   }
 
@@ -1114,11 +1260,11 @@ class _PetPainter extends CustomPainter {
   }
 
   double get _stageScale => switch (pet.stage) {
-        PetStage.seed => 0.68,
-        PetStage.sprout => 0.82,
-        PetStage.young => 0.93,
-        PetStage.adult => 1.04,
-      };
+    PetStage.seed => 0.68,
+    PetStage.sprout => 0.82,
+    PetStage.young => 0.93,
+    PetStage.adult => 1.04,
+  };
 
   void _egg(Canvas canvas) {
     canvas.drawOval(
@@ -1239,7 +1385,9 @@ class _PetPainter extends CustomPainter {
       const Rect.fromLTWH(28, 88, 64, 14),
       _fill(_emeraldDeep.withValues(alpha: 0.5)),
     );
-    final stems = pet.stage == PetStage.seed ? 1 : (pet.stage == PetStage.sprout ? 2 : 3);
+    final stems = pet.stage == PetStage.seed
+        ? 1
+        : (pet.stage == PetStage.sprout ? 2 : 3);
     for (var i = 0; i < stems; i++) {
       final x = 60 + (i - (stems - 1) / 2) * 16;
       final sway = math.sin(t * math.pi * 2 + i) * 5;
@@ -1342,7 +1490,11 @@ class _PetPainter extends CustomPainter {
     );
     _face(canvas, const Offset(74, 62), eyeGap: 4.5, mouth: 2.6);
     if (pet.stage == PetStage.adult) {
-      for (final dot in const [Offset(46, 58), Offset(52, 70), Offset(40, 68)]) {
+      for (final dot in const [
+        Offset(46, 58),
+        Offset(52, 70),
+        Offset(40, 68),
+      ]) {
         canvas.drawCircle(dot, 2.2, _fill(_pearl.withValues(alpha: 0.8)));
       }
     }
@@ -1399,7 +1551,5 @@ class _PetPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PetPainter oldDelegate) =>
-      oldDelegate.pet != pet ||
-      oldDelegate.t != t ||
-      oldDelegate.pop != pop;
+      oldDelegate.pet != pet || oldDelegate.t != t || oldDelegate.pop != pop;
 }

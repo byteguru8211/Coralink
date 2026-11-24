@@ -71,7 +71,10 @@ class SettingsScreen extends ConsumerWidget {
                               user.about.isEmpty ? user.phone : user.about,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                              style: TextStyle(
+                                color: palette.textMuted,
+                                fontSize: 12.5,
+                              ),
                             ),
                           ],
                         ),
@@ -80,7 +83,11 @@ class SettingsScreen extends ConsumerWidget {
                         strings.get('edit'),
                         style: TextStyle(color: palette.accent, fontSize: 13),
                       ),
-                      Icon(Icons.chevron_right_rounded, color: palette.accent, size: 20),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: palette.accent,
+                        size: 20,
+                      ),
                     ],
                   ),
                 ),
@@ -94,9 +101,14 @@ class SettingsScreen extends ConsumerWidget {
                 SettingsTile(
                   icon: Icons.notifications_none_rounded,
                   title: strings.get('notificationsSection'),
-                  subtitle: _notificationLabel(strings, settings.notificationMode),
+                  subtitle: _notificationLabel(
+                    strings,
+                    settings.notificationMode,
+                  ),
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SettingsNotificationsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const SettingsNotificationsScreen(),
+                    ),
                   ),
                 ),
                 SettingsTile(
@@ -104,7 +116,9 @@ class SettingsScreen extends ConsumerWidget {
                   title: strings.get('soundsSection'),
                   subtitle: strings.get('soundsTitle'),
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SettingsSoundsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const SettingsSoundsScreen(),
+                    ),
                   ),
                 ),
               ],
@@ -119,20 +133,25 @@ class SettingsScreen extends ConsumerWidget {
                   SwitchListTile(
                     value: settings.trayClose,
                     activeColor: palette.accent,
-                    onChanged: (value) => ref
-                        .read(settingsProvider.notifier)
-                        .setTrayClose(value),
+                    onChanged: (value) =>
+                        ref.read(settingsProvider.notifier).setTrayClose(value),
                     secondary: Icon(
                       Icons.desktop_windows_outlined,
                       color: palette.accent,
                     ),
                     title: Text(
                       strings.get('trayClose'),
-                      style: TextStyle(color: palette.textPrimary, fontSize: 15),
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontSize: 15,
+                      ),
                     ),
                     subtitle: Text(
                       strings.get('trayCloseDesc'),
-                      style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                      style: TextStyle(
+                        color: palette.textMuted,
+                        fontSize: 12.5,
+                      ),
                     ),
                   ),
                 ],
@@ -149,13 +168,17 @@ class SettingsScreen extends ConsumerWidget {
                   title: strings.get('privacyTitle'),
                   subtitle: strings.get('presenceNote'),
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SettingsPrivacyScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const SettingsPrivacyScreen(),
+                    ),
                   ),
                 ),
                 SettingsTile(
                   icon: Icons.language_rounded,
                   title: strings.get('language'),
-                  subtitle: settings.localeCode == 'en' ? strings.get('english') : strings.get('russian'),
+                  subtitle: settings.localeCode == 'en'
+                      ? strings.get('english')
+                      : strings.get('russian'),
                   onTap: () => _chooseLanguage(context, ref, strings),
                 ),
                 SettingsTile(
@@ -188,7 +211,8 @@ class SettingsScreen extends ConsumerWidget {
                   subtitle: settings.serverUrl.isEmpty
                       ? strings.get('serverLinkNote')
                       : settings.serverUrl,
-                  onTap: () => _editServerUrl(context, ref, strings, settings.serverUrl),
+                  onTap: () =>
+                      _editServerUrl(context, ref, strings, settings.serverUrl),
                 ),
               ],
             ),
@@ -210,7 +234,9 @@ class SettingsScreen extends ConsumerWidget {
                   icon: Icons.privacy_tip_outlined,
                   title: strings.get('privacyPolicy'),
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const PrivacyPolicyScreen(),
+                    ),
                   ),
                 ),
                 SettingsTile(
@@ -253,7 +279,10 @@ class SettingsScreen extends ConsumerWidget {
                         ),
                         TextButton(
                           onPressed: () => Navigator.pop(context, true),
-                          child: Text(strings.get('logout'), style: TextStyle(color: palette.coral)),
+                          child: Text(
+                            strings.get('logout'),
+                            style: TextStyle(color: palette.coral),
+                          ),
                         ),
                       ],
                     ),
@@ -273,7 +302,11 @@ class SettingsScreen extends ConsumerWidget {
                 const SizedBox(height: 8),
                 Text(
                   'Coralink 1.0 · ${strings.get('slogan')}',
-                  style: TextStyle(color: palette.textMuted, fontSize: 10.5, letterSpacing: 0.4),
+                  style: TextStyle(
+                    color: palette.textMuted,
+                    fontSize: 10.5,
+                    letterSpacing: 0.4,
+                  ),
                 ),
               ],
             ),
@@ -284,20 +317,24 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  String _notificationLabel(AppStrings strings, NotificationMode mode) => switch (mode) {
+  String _notificationLabel(AppStrings strings, NotificationMode mode) =>
+      switch (mode) {
         NotificationMode.minimal => strings.get('notifMinimal'),
         NotificationMode.medium => strings.get('notifMedium'),
-        NotificationMode.advanced => strings.get('notifAdvanced'),
         NotificationMode.offline => strings.get('notifOffline'),
       };
 
   String _themeLabel(AppStrings strings, ThemeMode mode) => switch (mode) {
-        ThemeMode.dark => strings.get('themeDark'),
-        ThemeMode.light => strings.get('themeLight'),
-        ThemeMode.system => strings.get('themeSystem'),
-      };
+    ThemeMode.dark => strings.get('themeDark'),
+    ThemeMode.light => strings.get('themeLight'),
+    ThemeMode.system => strings.get('themeSystem'),
+  };
 
-  Future<void> _chooseTheme(BuildContext context, WidgetRef ref, AppStrings strings) async {
+  Future<void> _chooseTheme(
+    BuildContext context,
+    WidgetRef ref,
+    AppStrings strings,
+  ) async {
     final settings = ref.read(settingsProvider);
     final palette = context.palette;
     final choice = await showModalBottomSheet<ThemeMode>(
@@ -330,7 +367,11 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _chooseLanguage(BuildContext context, WidgetRef ref, AppStrings strings) async {
+  Future<void> _chooseLanguage(
+    BuildContext context,
+    WidgetRef ref,
+    AppStrings strings,
+  ) async {
     final settings = ref.read(settingsProvider);
     final palette = context.palette;
     final choice = await showModalBottomSheet<String>(
@@ -366,7 +407,11 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _clearCache(BuildContext context, WidgetRef ref, AppStrings strings) async {
+  Future<void> _clearCache(
+    BuildContext context,
+    WidgetRef ref,
+    AppStrings strings,
+  ) async {
     final palette = context.palette;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -381,7 +426,10 @@ class SettingsScreen extends ConsumerWidget {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(strings.get('clearCache'), style: TextStyle(color: palette.coral)),
+            child: Text(
+              strings.get('clearCache'),
+              style: TextStyle(color: palette.coral),
+            ),
           ),
         ],
       ),
@@ -394,12 +442,16 @@ class SettingsScreen extends ConsumerWidget {
     }
     await ref.read(chatsProvider.notifier).refresh();
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(strings.get('cleared'))),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(strings.get('cleared'))));
   }
 
-  Future<void> _exportChats(BuildContext context, WidgetRef ref, AppStrings strings) async {
+  Future<void> _exportChats(
+    BuildContext context,
+    WidgetRef ref,
+    AppStrings strings,
+  ) async {
     final user = ref.read(sessionProvider).user;
     if (user == null) return;
     final path = await exportChats(ref.read(clientProvider).store, user.id);
@@ -455,8 +507,8 @@ class SettingsScreen extends ConsumerWidget {
     if (saved != true || value.isEmpty || value == current) return;
     await ref.read(settingsProvider.notifier).setServerUrl(value);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(strings.get('serverLinkSaved'))),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(strings.get('serverLinkSaved'))));
   }
 }

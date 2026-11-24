@@ -16,24 +16,23 @@ class SettingsNotificationsScreen extends ConsumerWidget {
     final settings = ref.watch(settingsProvider);
     final palette = context.palette;
 
+    final silentSupported =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
     final options = [
-      (
-        NotificationMode.minimal,
-        Icons.volume_mute_rounded,
-        strings.get('notifMinimal'),
-        strings.get('notifMinimalDesc'),
-      ),
+      if (silentSupported)
+        (
+          NotificationMode.minimal,
+          Icons.volume_mute_rounded,
+          strings.get('notifMinimal'),
+          strings.get('notifMinimalDesc'),
+        ),
       (
         NotificationMode.medium,
-        Icons.eco_outlined,
+        Icons.notifications_active_outlined,
         strings.get('notifMedium'),
         strings.get('notifMediumDesc'),
-      ),
-      (
-        NotificationMode.advanced,
-        Icons.auto_awesome_rounded,
-        strings.get('notifAdvanced'),
-        strings.get('notifAdvancedDesc'),
       ),
       (
         NotificationMode.offline,
@@ -67,7 +66,9 @@ class SettingsNotificationsScreen extends ConsumerWidget {
                 onTap: () async {
                   final granted = option.$1 == NotificationMode.offline
                       ? true
-                      : await ref.read(notificationProvider).requestPermission();
+                      : await ref
+                            .read(notificationProvider)
+                            .requestPermission();
                   await ref
                       .read(settingsProvider.notifier)
                       .setNotificationMode(option.$1);
@@ -125,7 +126,10 @@ class SettingsNotificationsScreen extends ConsumerWidget {
                             const SizedBox(height: 3),
                             Text(
                               option.$4,
-                              style: TextStyle(color: palette.textMuted, fontSize: 12.5),
+                              style: TextStyle(
+                                color: palette.textMuted,
+                                fontSize: 12.5,
+                              ),
                             ),
                           ],
                         ),
@@ -167,6 +171,12 @@ class SettingsNotificationsScreen extends ConsumerWidget {
             title: strings.get('notifTest'),
             subtitle: strings.get('notifTestDesc'),
             onTap: () async {
+              if (settings.notificationMode == NotificationMode.offline) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(strings.get('notifOffline'))),
+                );
+                return;
+              }
               final notifications = ref.read(notificationProvider);
               final granted = await notifications.requestPermission();
               if (!granted) {
@@ -189,32 +199,14 @@ class SettingsNotificationsScreen extends ConsumerWidget {
               );
             },
           ),
-          if (defaultTargetPlatform == TargetPlatform.android) ...[
-            const SizedBox(height: 20),
-            GlassPanel(
-              margin: EdgeInsets.zero,
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: SwitchListTile(
-                value: settings.backgroundAlive,
-                activeColor: palette.accent,
-                onChanged: (value) =>
-                    ref.read(settingsProvider.notifier).setBackgroundAlive(value),
-                secondary: Icon(Icons.nightlight_round, color: palette.accent),
-                title: Text(
-                  strings.get('backgroundAlive'),
-                  style: TextStyle(color: palette.textPrimary, fontSize: 15),
-                ),
-                subtitle: Text(
-                  strings.get('backgroundAliveDesc'),
-                  style: TextStyle(color: palette.textMuted, fontSize: 12),
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 10),
           Row(
             children: [
-              Icon(Icons.info_outline_rounded, size: 14, color: palette.textMuted),
+              Icon(
+                Icons.info_outline_rounded,
+                size: 14,
+                color: palette.textMuted,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(

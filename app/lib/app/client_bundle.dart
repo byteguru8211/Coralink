@@ -16,6 +16,7 @@ import '../security/key_backup.dart';
 import '../security/signal_service.dart';
 import '../services/echo.dart';
 import '../services/message_service.dart';
+import '../services/pet_service.dart';
 
 /// Everything that is scoped to an authenticated session. Recreated on login,
 /// disposed on logout without touching the persisted database file.
@@ -31,6 +32,7 @@ class ClientBundle {
     required this.call,
     required this.p2p,
     required this.messages,
+    required this.pets,
     required this.echo,
   });
 
@@ -44,8 +46,10 @@ class ClientBundle {
   final CallService call;
   final P2PManager p2p;
   final MessageService messages;
+  final PetService pets;
   final EchoSearch echo;
   StreamSubscription<CallSummary>? _callHistory;
+  Timer? _backupTimer;
 
   static Future<ClientBundle> create({
     required AppConfig config,
@@ -55,6 +59,7 @@ class ClientBundle {
     required User user,
     required int archiveDays,
     required String presenceScope,
+    bool allowCreateIdentity = false,
   }) async {
     final api = ApiClient(baseUrl: config.apiBaseUrl, token: token);
     try {
@@ -62,8 +67,13 @@ class ClientBundle {
     } catch (_) {
       // Offline start: the setting will be pushed on the next profile save.
     }
-    final signal = await SignalService.load(secure: secure, api: api, userId: user.id);
-    final groupCrypto = GroupCrypto(secure);
+    final signal = await SignalService.load(
+      secure: secure,
+      api: api,
+      userId: user.id,
+      allowCreate: allowCreateIdentity,
+    );
+    final groupCrypto = GroupCrypto(secure, userId: user.id);
     final keyBackup = KeyBackup(secure);
     final realtime = RealtimeService(config.wsUrl, token);
     final call = CallService(config, realtime)..identify(user.id);
@@ -77,21 +87,34 @@ class ClientBundle {
       p2p: p2p,
       myId: user.id,
     );
+    late final ClientBundle bundle;
+    final pets = PetService(
+      store: store,
+      api: api,
+      secure: secure,
+      groupCrypto: groupCrypto,
+      messages: messages,
+      realtime: realtime,
+      myId: user.id,
+      onKeysChanged: () => bundle._scheduleBackup(),
+    );
 
     final callHistory = call.completed.listen((summary) async {
       try {
         // A call can be the first contact with a peer: make sure the chat exists
         // so the history chip has a conversation to live in, like any messenger.
         await messages.ensureChat(summary.peerId);
-        await store.upsertCall(CallRecord(
-          id: const Uuid().v4(),
-          peerId: summary.peerId,
-          startedAt: summary.startedAt,
-          video: summary.video,
-          outgoing: summary.outgoing,
-          answered: summary.answered,
-          durationSeconds: summary.durationSeconds,
-        ));
+        await store.upsertCall(
+          CallRecord(
+            id: const Uuid().v4(),
+            peerId: summary.peerId,
+            startedAt: summary.startedAt,
+            video: summary.video,
+            outgoing: summary.outgoing,
+            answered: summary.answered,
+            durationSeconds: summary.durationSeconds,
+          ),
+        );
       } catch (error) {
         Log.e('call.history', error);
       }
@@ -106,17 +129,6 @@ class ClientBundle {
     realtime.statuses.listen((status) {
       if (status == RealtimeStatus.connected) {
         unawaited(signal.ensurePublished());
-        unawaited(messages.flushOutbox());
-        // Keep the encrypted key backup current so a device that logs in later
-        // restores recent sessions/group keys. Uses the cached key (no password).
-        unawaited(() async {
-          try {
-            final built = await keyBackup.build(user.id);
-            if (built != null) await api.uploadBackup(blob: built.blob, salt: built.salt);
-          } catch (error) {
-            Log.d('backup', 'Refresh deferred: $error');
-          }
-        }());
       }
     });
     unawaited(messages.syncQueue());
@@ -125,18 +137,20 @@ class ClientBundle {
     try {
       final groups = await api.myGroups();
       for (final group in groups) {
-        await store.upsertChat(Chat.group(
-          id: group.id,
-          title: group.title,
-          avatar: group.avatar,
-          memberCount: group.memberCount,
-        ));
+        await store.upsertChat(
+          Chat.group(
+            id: group.id,
+            title: group.title,
+            avatar: group.avatar,
+            memberCount: group.memberCount,
+          ),
+        );
       }
     } catch (_) {
       // Offline start: groups resync on the next connection.
     }
 
-    final bundle = ClientBundle._(
+    bundle = ClientBundle._(
       config: config,
       secure: secure,
       store: store,
@@ -147,16 +161,51 @@ class ClientBundle {
       call: call,
       p2p: p2p,
       messages: messages,
+      pets: pets,
       echo: EchoSearch(store),
     );
     bundle._callHistory = callHistory;
+    var backupRunning = false;
+    bundle._uploadBackup = () async {
+      if (backupRunning) return;
+      backupRunning = true;
+      try {
+        final built = await keyBackup.build(user.id);
+        if (built != null) {
+          await api.uploadBackup(
+            blob: built.blob,
+            salt: built.salt,
+            revision: built.revision,
+          );
+        }
+      } catch (error) {
+        Log.d('backup', 'Refresh deferred: $error');
+      } finally {
+        backupRunning = false;
+      }
+    };
+    signal.onKeysChanged = bundle._scheduleBackup;
+    groupCrypto.onKeysChanged = bundle._scheduleBackup;
+    unawaited(pets.refreshAll());
     return bundle;
   }
 
+  void _scheduleBackup() {
+    _backupTimer?.cancel();
+    _backupTimer = Timer(
+      const Duration(seconds: 2),
+      () => unawaited(_uploadBackup?.call() ?? Future.value()),
+    );
+  }
+
+  Future<void> Function()? _uploadBackup;
+
   Future<void> dispose() async {
+    _backupTimer?.cancel();
     await _callHistory?.cancel();
     await call.dispose();
     await p2p.dispose();
+    await pets.dispose();
     await realtime.dispose();
     await messages.dispose();
     api.close();

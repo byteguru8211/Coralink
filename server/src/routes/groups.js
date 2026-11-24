@@ -87,7 +87,44 @@ function registerGroupRoutes(router) {
     const body = requireBody(context);
     const ids = Array.isArray(body.ids) ? body.ids.filter((x) => typeof x === 'string') : [];
     const result = context.db.ackGroupMessages(user.id, ids);
-    sendJson(context.res, 200, { ok: true, acked: result.acked, bySender: result.bySender });
+    for (const group of result.bySender) {
+      context.hub.sendToUser(group.senderId, {
+        type: 'message.delivered',
+        messageIds: group.messageIds,
+        ids: group.messageIds,
+      });
+    }
+    sendJson(context.res, 200, { ok: true, acked: result.acked });
+  });
+
+  router.add('POST', '/api/v1/groups/read', async (context) => {
+    const user = requireAuth(context);
+    const body = requireBody(context);
+    const groupId = typeof body.groupId === 'string' ? body.groupId : '';
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((id) => typeof id === 'string').slice(0, 500)
+      : [];
+    const group = groupId ? context.db.getGroup(groupId) : null;
+    if (!group || !context.db.isGroupMember(groupId, user.id)) {
+      throw new HttpError(403, 'not_a_member', 'You are not a member of this group');
+    }
+    const readIds = context.db.markGroupMessagesRead(user.id, ids, Date.now(), groupId);
+    const bySender = new Map();
+    for (const id of readIds) {
+      const senderId = context.db.getGroupMessageSender(id);
+      if (!senderId || senderId === user.id) continue;
+      if (!bySender.has(senderId)) bySender.set(senderId, []);
+      bySender.get(senderId).push(id);
+    }
+    for (const [senderId, messageIds] of bySender) {
+      context.hub.sendToUser(senderId, {
+        type: 'group.read',
+        groupId,
+        messageIds,
+        by: user.id,
+      });
+    }
+    sendJson(context.res, 200, { ok: true, read: readIds });
   });
 
   // Group detail + members (membership required).

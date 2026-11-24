@@ -240,7 +240,16 @@ test(
     });
     const read = await aliceWs.waitFor('message.read');
     assert.deepEqual(read.messageIds, [messageId]);
+    assert.deepEqual(read.ids, [messageId]);
     assert.equal(read.by, bob.user.id);
+
+    const statuses = await h.api('/api/v1/messages/status', {
+      method: 'POST',
+      token: alice.token,
+      body: { ids: [messageId] },
+    });
+    assert.equal(statuses.status, 200);
+    assert.deepEqual(statuses.body.statuses, [{ id: messageId, status: 'read' }]);
 
     await aliceWs.close();
     await bobWs.close();

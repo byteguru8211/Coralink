@@ -27,8 +27,17 @@ function registerBackupRoutes(router) {
     if (typeof body.salt !== 'string' || !isBase64String(body.salt, 256)) {
       throw new HttpError(400, 'invalid_backup', 'salt must be base64');
     }
-    context.db.saveBackup(user.id, body.blob, body.salt, Date.now());
-    sendJson(context.res, 200, { ok: true });
+    const revision = Number.isSafeInteger(body.revision) && body.revision >= 0
+      ? body.revision
+      : 0;
+    const result = context.db.saveBackup(
+      user.id,
+      body.blob,
+      body.salt,
+      Date.now(),
+      revision,
+    );
+    sendJson(context.res, 200, { ok: true, ...result });
   });
 
   router.add('GET', '/api/v1/backup', async (context) => {
@@ -41,6 +50,7 @@ function registerBackupRoutes(router) {
       blob: backup.blob,
       salt: backup.salt,
       updatedAt: backup.updatedAt,
+      revision: backup.revision,
     });
   });
 }

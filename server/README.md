@@ -1,8 +1,9 @@
 # Coralink Server
 
 Signaling and message relay backend for the Coralink end-to-end encrypted
-messenger. The server stores ciphertext, public keys, routing metadata, and
-presence; it never receives plaintext or private keys.
+messenger. The server stores message ciphertext, public keys, routing metadata,
+presence and encrypted Tamagotchi snapshots; it never receives message plaintext
+or private keys. Tamagotchi membership, action type and ordering are metadata.
 
 ## Requirements
 
@@ -72,10 +73,19 @@ All endpoints are JSON under `/api/v1`. Authenticated requests use
 | `POST` | `/contacts` | Yes | Add a contact (idempotent). |
 | `DELETE` | `/contacts/:userId` | Yes | Remove a contact. |
 | `POST` | `/keys` | Yes | Publish identity, signed prekey, and one-time prekeys. |
+| `GET` | `/keys/:userId/info` | Yes | Public identity info without consuming a prekey. |
 | `GET` | `/keys/:userId` | Yes | Fetch a key bundle and atomically consume a prekey. |
 | `POST` | `/keys/prekeys` | Yes | Replenish one-time prekeys. |
 | `GET` | `/messages/queued` | Yes | Fetch up to 500 undelivered messages. |
 | `POST` | `/messages/ack` | Yes | Mark messages delivered and notify senders. |
+| `POST` | `/messages/read` | Yes | Persist read receipts and notify online senders. |
+| `POST` | `/messages/status` | Yes | Recover delivery/read status for the caller's messages. |
+| `GET` | `/pets` | Yes | List personal, direct and group Tamagotchi. |
+| `POST` | `/pets` | Yes | Create a Tamagotchi or direct invitation. |
+| `GET` | `/pets/:id` | Yes | Metadata, encrypted snapshot and ordered operations. |
+| `POST` | `/pets/:id/operations` | Yes | Append an idempotent encrypted care operation. |
+| `PUT` | `/pets/:id/snapshot` | Yes | Save a non-stale encrypted snapshot. |
+| `POST` | `/pets/:id/accept`, `/pets/:id/decline`, `/pets/:id/release` | Yes | Manage invitation or shared pet lifecycle. |
 | `GET` | `/presence?ids=a,b,c` | Yes | Presence for up to 100 users. |
 | `POST` | `/push/register` | Yes | Store a push token. |
 | `DELETE` | `/push/register` | Yes | Remove a push token. |
@@ -103,8 +113,8 @@ Client events:
 - `{"type":"presence","status":"active|away"}`
 
 Server events include `message`, `message.ack`, `message.ack.ok`,
-`message.delivered`, `message.read`, `signal`, `typing`, `presence`, and
-`error`. The server sends ping frames every 30 seconds and terminates sockets
+`message.delivered`, `message.read`, `signal`, `typing`, `presence`, `pet.invited`,
+`pet.operation`, `pet.updated`, and `error`. The server sends ping frames every 30 seconds and terminates sockets
 that do not answer with pong.
 
 ## Tests
@@ -113,8 +123,8 @@ that do not answer with pong.
 npm test
 ```
 
-Tests use the built-in `node:test` runner and real HTTP/WebSocket servers on
-ephemeral ports with isolated temporary SQLite databases.
+Tests: 54 server tests covering auth, keys, receipts, groups, calls, migrations,
+backups and Tamagotchi authorization/ordering.
 
 ## Docker
 

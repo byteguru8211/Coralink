@@ -7,7 +7,6 @@ import '../data/local_store.dart';
 import '../data/secure_store.dart';
 import '../data/settings_store.dart';
 import '../services/audio_service.dart';
-import '../services/keep_alive.dart';
 import '../services/notification_service.dart';
 import 'desktop_window.dart';
 
@@ -72,21 +71,13 @@ class SettingsController extends Notifier<AppSettings> {
     await _update(next);
   }
 
-  Future<void> setBackgroundAlive(bool value) async {
-    await _update(state.copyWith(backgroundAlive: value));
-    if (value) {
-      await startKeepAlive();
-    } else {
-      await stopKeepAlive();
-    }
-  }
-
   Future<void> setTrayClose(bool value) async {
     DesktopShell.instance.setCloseToTray(value);
     await _update(state.copyWith(trayClose: value));
   }
 
-  Future<void> setVolume(double value) => _update(state.copyWith(volume: value));
+  Future<void> setVolume(double value) =>
+      _update(state.copyWith(volume: value));
 
   Future<void> setPrivacy(PrivacyScope scope) =>
       _update(state.copyWith(privacyScope: scope));
@@ -98,8 +89,9 @@ class SettingsController extends Notifier<AppSettings> {
       _update(state.copyWith(serverUrl: url.trim()));
 }
 
-final settingsProvider =
-    NotifierProvider<SettingsController, AppSettings>(SettingsController.new);
+final settingsProvider = NotifierProvider<SettingsController, AppSettings>(
+  SettingsController.new,
+);
 
 /// The config actually used by network clients: the compiled default with the
 /// user's saved server link (e.g. a Tailscale `*.ts.net` URL) applied on top.

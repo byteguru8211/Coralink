@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
@@ -18,62 +19,84 @@ class GroupCryptoException implements Exception {
 /// distributed to members over the existing 1-на-1 Signal channel, so the
 /// server only ever relays opaque ciphertext.
 class GroupCrypto {
-  GroupCrypto(this._secure);
+  GroupCrypto(this._secure, {String? userId}) : _userId = userId;
 
   final SecureStore _secure;
+  final String? _userId;
+  void Function()? onKeysChanged;
   final AesGcm _aes = AesGcm.with256bits();
 
   static const _nonceLength = 12;
   static const _tagLength = 16;
 
-  String _storageKey(String groupId) => 'group.key.$groupId';
+  String _storageKey(String groupId) =>
+      _userId == null ? 'group.key.$groupId' : 'group.key.$_userId.$groupId';
 
-  Future<String> _ensureKey(String groupId) async {
-    final existing = await _secure.read(_storageKey(groupId));
-    if (existing != null && existing.isNotEmpty) return existing;
+  Future<String?> _readKey(String groupId) async {
+    final key = await _secure.read(_storageKey(groupId));
+    if (key != null || _userId == null) return key;
+    final legacy = await _secure.read('group.key.$groupId');
+    if (legacy != null) {
+      await _secure.write(_storageKey(groupId), legacy);
+      onKeysChanged?.call();
+    }
+    return legacy;
+  }
+
+  Future<String> _createKey(String groupId) async {
     final random = Random.secure();
     final bytes = List<int>.generate(32, (_) => random.nextInt(256));
     final key = base64Encode(bytes);
     await _secure.write(_storageKey(groupId), key);
+    onKeysChanged?.call();
     return key;
   }
 
-  /// The current key for a group (generating one on first use). Used by the
-  /// creator when distributing to members.
-  Future<String> keyFor(String groupId) => _ensureKey(groupId);
+  Future<String> keyFor(String groupId) async =>
+      await _readKey(groupId) ?? await _createKey(groupId);
 
-  Future<void> importKey(String groupId, String keyB64) =>
-      _secure.write(_storageKey(groupId), keyB64);
-
-  Future<bool> hasKey(String groupId) async {
-    final key = await _secure.read(_storageKey(groupId));
-    return key != null && key.isNotEmpty;
+  Future<void> importKey(String groupId, String keyB64) async {
+    final key = base64Decode(keyB64);
+    if (key.length != 32) {
+      throw GroupCryptoException('bad_key', 'Group key must be 256 bits');
+    }
+    await _secure.write(_storageKey(groupId), keyB64);
+    onKeysChanged?.call();
   }
 
-  Future<void> removeKey(String groupId) => _secure.delete(_storageKey(groupId));
+  Future<bool> hasKey(String groupId) async => await _readKey(groupId) != null;
+
+  Future<void> removeKey(String groupId) async {
+    await _secure.delete(_storageKey(groupId));
+    onKeysChanged?.call();
+  }
 
   Future<String> encrypt(String groupId, Map<String, dynamic> envelope) async {
-    final key = SecretKey(base64Decode(await _ensureKey(groupId)));
+    final keyB64 = await _readKey(groupId);
+    if (keyB64 == null) {
+      throw GroupCryptoException('no_key', 'Group key is missing');
+    }
     final nonce = _aes.newNonce();
     final box = await _aes.encrypt(
       utf8.encode(jsonEncode(envelope)),
-      secretKey: key,
+      secretKey: SecretKey(base64Decode(keyB64)),
       nonce: nonce,
     );
-    final out = <int>[
-      ...nonce,
-      ...box.mac.bytes,
-      ...box.cipherText,
-    ];
+    final out = <int>[...nonce, ...box.mac.bytes, ...box.cipherText];
     return base64Encode(out);
   }
 
   Future<Map<String, dynamic>> decrypt(String groupId, String payload) async {
-    final keyB64 = await _secure.read(_storageKey(groupId));
+    final keyB64 = await _readKey(groupId);
     if (keyB64 == null) {
       throw GroupCryptoException('no_key', 'Group key is missing');
     }
-    final raw = base64Decode(payload);
+    final Uint8List raw;
+    try {
+      raw = base64Decode(payload);
+    } catch (_) {
+      throw GroupCryptoException('bad_payload', 'Group payload is not base64');
+    }
     if (raw.length < _nonceLength + _tagLength) {
       throw GroupCryptoException('bad_payload', 'Group payload is too short');
     }
@@ -82,7 +105,23 @@ class GroupCrypto {
       nonce: raw.sublist(0, _nonceLength),
       mac: Mac(raw.sublist(_nonceLength, _nonceLength + _tagLength)),
     );
-    final clear = await _aes.decrypt(box, secretKey: SecretKey(base64Decode(keyB64)));
-    return jsonDecode(utf8.decode(clear)) as Map<String, dynamic>;
+    try {
+      final clear = await _aes.decrypt(
+        box,
+        secretKey: SecretKey(base64Decode(keyB64)),
+      );
+      final decoded = jsonDecode(utf8.decode(clear));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Group envelope is not an object');
+      }
+      return decoded;
+    } on GroupCryptoException {
+      rethrow;
+    } catch (_) {
+      throw GroupCryptoException(
+        'decrypt_failed',
+        'Could not decrypt group message',
+      );
+    }
   }
 }

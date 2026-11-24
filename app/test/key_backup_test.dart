@@ -17,8 +17,7 @@ class _FakeStorage extends FlutterSecureStorage {
     WebOptions? webOptions,
     AppleOptions? mOptions,
     WindowsOptions? wOptions,
-  }) async =>
-      _data[key];
+  }) async => _data[key];
 
   @override
   Future<void> write({
@@ -59,8 +58,7 @@ class _FakeStorage extends FlutterSecureStorage {
     WebOptions? webOptions,
     AppleOptions? mOptions,
     WindowsOptions? wOptions,
-  }) async =>
-      Map<String, String>.from(_data);
+  }) async => Map<String, String>.from(_data);
 }
 
 void main() {
@@ -70,6 +68,7 @@ void main() {
     await source.writeSignalState(userId, '{"identity":"abc"}');
     await source.write('group.key.g1', 'KEY1');
     await source.write('group.key.g2', 'KEY2');
+    await source.write('pet.key.$userId.pet-1', 'PETKEY');
 
     final backup = KeyBackup(source);
     await backup.primeKeyFromPassword('correct horse');
@@ -86,8 +85,28 @@ void main() {
     );
     expect(restored, isTrue);
     expect(await target.readSignalState(userId), '{"identity":"abc"}');
-    expect(await target.read('group.key.g1'), 'KEY1');
-    expect(await target.read('group.key.g2'), 'KEY2');
+    expect(await target.read('group.key.$userId.g1'), 'KEY1');
+    expect(await target.read('group.key.$userId.g2'), 'KEY2');
+    expect(await target.read('pet.key.$userId.pet-1'), 'PETKEY');
+  });
+
+  test('an older backup cannot roll back a newer local ratchet', () async {
+    final source = SecureStore(_FakeStorage());
+    await source.writeSignalState('u', '{"revision":5}');
+    final backup = KeyBackup(source);
+    await backup.primeKeyFromPassword('right-pw');
+    final built = await backup.build('u');
+
+    final target = SecureStore(_FakeStorage());
+    await target.writeSignalState('u', '{"revision":10}');
+    final ok = await KeyBackup(target).restore(
+      userId: 'u',
+      password: 'right-pw',
+      blob: built!.blob,
+      salt: built.salt,
+    );
+    expect(ok, isTrue);
+    expect(await target.readSignalState('u'), '{"revision":10}');
   });
 
   test('wrong password cannot decrypt a key backup', () async {

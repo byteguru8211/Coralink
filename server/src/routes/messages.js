@@ -45,6 +45,35 @@ function registerMessageRoutes(router) {
     });
   });
 
+  router.add('POST', '/api/v1/messages/read', async (context) => {
+    const user = requireAuth(context);
+    const body = requireBody(context);
+    const ids = validateIds(body.ids);
+    const chatWith = typeof body.chatWith === 'string' ? body.chatWith : '';
+    if (!chatWith || !context.db.getUserById(chatWith)) {
+      throw new HttpError(400, 'invalid_chat', 'A valid chat recipient is required');
+    }
+    const readIds = context.db.markMessagesRead(user.id, chatWith, ids, Date.now());
+    for (const id of readIds) {
+      context.hub.sendToUser(chatWith, {
+        type: 'message.read',
+        messageIds: [id],
+        ids: [id],
+        by: user.id,
+      });
+    }
+    sendJson(context.res, 200, { ok: true, read: readIds });
+  });
+
+  router.add('POST', '/api/v1/messages/status', async (context) => {
+    const user = requireAuth(context);
+    const body = requireBody(context);
+    const ids = validateIds(body.ids);
+    sendJson(context.res, 200, {
+      statuses: context.db.getMessageStatusesForSender(user.id, ids),
+    });
+  });
+
   router.add('POST', '/api/v1/messages/ack', async (context) => {
     const user = requireAuth(context);
     const body = requireBody(context);

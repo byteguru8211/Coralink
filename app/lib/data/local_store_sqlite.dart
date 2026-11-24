@@ -14,7 +14,7 @@ class SqliteLocalStore implements LocalStore {
 
   final Database _db;
 
-  static const schemaVersion = 5;
+  static const schemaVersion = 7;
 
   static Future<void> createSchema(Database db, int version) async {
     await db.execute('''
@@ -102,13 +102,42 @@ class SqliteLocalStore implements LocalStore {
       'CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id, started_at)',
     );
     await db.execute(_petsTable);
+    await db.execute(_pendingReadsTable);
+    await db.execute(_petOutboxTable);
   }
+
+  static const _pendingReadsTable = '''
+      CREATE TABLE IF NOT EXISTS pending_reads(
+        message_id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    ''';
 
   static const _petsTable = '''
       CREATE TABLE IF NOT EXISTS pets(
         chat_id TEXT PRIMARY KEY,
         state TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        server_id TEXT UNIQUE,
+        scope TEXT NOT NULL DEFAULT 'direct',
+        status TEXT NOT NULL DEFAULT 'active',
+        membership_state TEXT NOT NULL DEFAULT 'active',
+        role TEXT NOT NULL DEFAULT 'owner',
+        seq INTEGER NOT NULL DEFAULT 0,
+        members TEXT NOT NULL DEFAULT '[]',
+        snapshot TEXT NOT NULL DEFAULT ''
+      )
+    ''';
+
+  static const _petOutboxTable = '''
+      CREATE TABLE IF NOT EXISTS pet_outbox(
+        id TEXT PRIMARY KEY,
+        pet_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0
       )
     ''';
 
@@ -126,7 +155,11 @@ class SqliteLocalStore implements LocalStore {
 
   /// Adds the avatar columns introduced in schema v2 for databases created
   /// before profile photos existed.
-  static Future<void> upgrade(Database db, int oldVersion, int newVersion) async {
+  static Future<void> upgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
     if (oldVersion < 2) {
       await db.execute(
         "ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
@@ -155,6 +188,34 @@ class SqliteLocalStore implements LocalStore {
     if (oldVersion < 5) {
       await db.execute(_petsTable);
     }
+    if (oldVersion < 6) {
+      await db.execute(_pendingReadsTable);
+    }
+    if (oldVersion < 7) {
+      await db.execute("ALTER TABLE pets ADD COLUMN server_id TEXT");
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN scope TEXT NOT NULL DEFAULT 'direct'",
+      );
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+      );
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN membership_state TEXT NOT NULL DEFAULT 'active'",
+      );
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'",
+      );
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN seq INTEGER NOT NULL DEFAULT 0",
+      );
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN members TEXT NOT NULL DEFAULT '[]'",
+      );
+      await db.execute(
+        "ALTER TABLE pets ADD COLUMN snapshot TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute(_petOutboxTable);
+    }
   }
 
   @override
@@ -169,31 +230,43 @@ class SqliteLocalStore implements LocalStore {
     await _db.delete('calls');
     await _db.delete('users');
     await _db.delete('pets');
+    await _db.delete('pet_outbox');
+    await _db.delete('pending_reads');
   }
 
   @override
   Future<void> upsertUser(User user) => _db.insert(
-        'users',
-        user.toRow(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+    'users',
+    user.toRow(),
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
 
   @override
   Future<User?> getUser(String id) async {
-    final rows = await _db.query('users', where: 'id = ?', whereArgs: [id], limit: 1);
+    final rows = await _db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
     return rows.isEmpty ? null : User.fromRow(rows.first);
   }
 
   @override
   Future<void> upsertChat(Chat chat) => _db.insert(
-        'chats',
-        chat.toRow(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+    'chats',
+    chat.toRow(),
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
 
   @override
   Future<Chat?> getChat(String id) async {
-    final rows = await _db.query('chats', where: 'id = ?', whereArgs: [id], limit: 1);
+    final rows = await _db.query(
+      'chats',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
     return rows.isEmpty ? null : Chat.fromRow(rows.first);
   }
 
@@ -231,7 +304,12 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<void> markChatRead(String id) async {
-    await _db.update('chats', {'unread_count': 0}, where: 'id = ?', whereArgs: [id]);
+    await _db.update(
+      'chats',
+      {'unread_count': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   @override
@@ -244,7 +322,13 @@ class SqliteLocalStore implements LocalStore {
     await _db.rawUpdate(
       '''UPDATE chats SET last_message_text = ?, last_message_at = ?, updated_at = ?,
          unread_count = unread_count + ?, archived = 0 WHERE id = ?''',
-      [preview, at.millisecondsSinceEpoch, at.millisecondsSinceEpoch, incrementUnread ? 1 : 0, chatId],
+      [
+        preview,
+        at.millisecondsSinceEpoch,
+        at.millisecondsSinceEpoch,
+        incrementUnread ? 1 : 0,
+        chatId,
+      ],
     );
   }
 
@@ -261,14 +345,19 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<void> upsertMessage(Message message) => _db.insert(
-        'messages',
-        message.toRow(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+    'messages',
+    message.toRow(),
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
 
   @override
   Future<Message?> getMessage(String id) async {
-    final rows = await _db.query('messages', where: 'id = ?', whereArgs: [id], limit: 1);
+    final rows = await _db.query(
+      'messages',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
     return rows.isEmpty ? null : Message.fromRow(rows.first);
   }
 
@@ -319,6 +408,18 @@ class SqliteLocalStore implements LocalStore {
     MessageStatus status, {
     DateTime? at,
   }) async {
+    final current = await _db.query(
+      'messages',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (current.isNotEmpty) {
+      final existing = messageStatusFromWire(
+        current.first['status'] as String?,
+      );
+      if (status.index < existing.index) return;
+    }
     final values = <String, Object?>{'status': messageStatusToWire(status)};
     if (at != null && status == MessageStatus.delivered) {
       values['delivered_at'] = at.millisecondsSinceEpoch;
@@ -336,8 +437,14 @@ class SqliteLocalStore implements LocalStore {
     final stamp = (at ?? DateTime.now()).millisecondsSinceEpoch;
     final placeholders = List.filled(ids.length, '?').join(',');
     await _db.rawUpdate(
-      'UPDATE messages SET status = ?, read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE id IN ($placeholders)',
-      [messageStatusToWire(MessageStatus.read), stamp, stamp, ...ids],
+      'UPDATE messages SET status = ?, read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE id IN ($placeholders) AND status != ?',
+      [
+        messageStatusToWire(MessageStatus.read),
+        stamp,
+        stamp,
+        ...ids,
+        messageStatusToWire(MessageStatus.read),
+      ],
     );
   }
 
@@ -349,17 +456,58 @@ class SqliteLocalStore implements LocalStore {
     await _db.rawUpdate(
       '''UPDATE messages SET status = CASE WHEN status = ? THEN status ELSE ? END,
          delivered_at = COALESCE(delivered_at, ?) WHERE id IN ($placeholders)''',
-      [messageStatusToWire(MessageStatus.read), messageStatusToWire(MessageStatus.delivered), stamp, ...ids],
+      [
+        messageStatusToWire(MessageStatus.read),
+        messageStatusToWire(MessageStatus.delivered),
+        stamp,
+        ...ids,
+      ],
+    );
+  }
+
+  @override
+  Future<void> enqueueReadReceipt(String messageId, String chatId) async {
+    await _db.insert('pending_reads', {
+      'message_id': messageId,
+      'chat_id': chatId,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  @override
+  Future<List<PendingReadReceipt>> getPendingReadReceipts() async {
+    final rows = await _db.query('pending_reads', orderBy: 'created_at ASC');
+    return rows
+        .map(
+          (row) => PendingReadReceipt(
+            messageId: row['message_id'] as String,
+            chatId: row['chat_id'] as String,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(
+              row['created_at'] as int,
+            ),
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> removeReadReceipts(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await _db.delete(
+      'pending_reads',
+      where: 'message_id IN ($placeholders)',
+      whereArgs: ids,
     );
   }
 
   @override
   Future<void> softDeleteMessage(String id) => _db.update(
-        'messages',
-        {'deleted': 1, 'text': '', 'image_b64': null},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+    'messages',
+    {'deleted': 1, 'text': '', 'image_b64': null},
+    where: 'id = ?',
+    whereArgs: [id],
+  );
 
   @override
   Future<void> deleteMessage(String id) =>
@@ -367,7 +515,12 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<void> setReactions(String id, Map<String, List<String>> reactions) =>
-      _db.update('messages', {'reactions': jsonEncode(reactions)}, where: 'id = ?', whereArgs: [id]);
+      _db.update(
+        'messages',
+        {'reactions': jsonEncode(reactions)},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
 
   @override
   Future<void> archiveMessagesOlderThan(Duration age) async {
@@ -389,7 +542,9 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<int> unreadTotal() async {
-    final rows = await _db.rawQuery('SELECT COALESCE(SUM(unread_count),0) AS c FROM chats');
+    final rows = await _db.rawQuery(
+      'SELECT COALESCE(SUM(unread_count),0) AS c FROM chats',
+    );
     return (rows.first['c'] as num).toInt();
   }
 
@@ -398,18 +553,27 @@ class SqliteLocalStore implements LocalStore {
     final row = user.toRow()
       ..['added_at'] = (addedAt ?? DateTime.now()).millisecondsSinceEpoch;
     row.remove('id');
-    await _db.insert('contacts', {'id': user.id, ...row},
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    await _db.insert('contacts', {
+      'id': user.id,
+      ...row,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   @override
   Future<List<Contact>> getContacts() async {
-    final rows = await _db.query('contacts', orderBy: 'name COLLATE NOCASE ASC');
+    final rows = await _db.query(
+      'contacts',
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
     return rows
-        .map((row) => Contact(
-              user: User.fromRow(row),
-              addedAt: DateTime.fromMillisecondsSinceEpoch((row['added_at'] as num).toInt()),
-            ))
+        .map(
+          (row) => Contact(
+            user: User.fromRow(row),
+            addedAt: DateTime.fromMillisecondsSinceEpoch(
+              (row['added_at'] as num).toInt(),
+            ),
+          ),
+        )
         .toList();
   }
 
@@ -431,10 +595,10 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<void> upsertCall(CallRecord record) => _db.insert(
-        'calls',
-        record.toRow(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+    'calls',
+    record.toRow(),
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
 
   @override
   Future<List<CallRecord>> getCalls(String peerId, {int limit = 60}) async {
@@ -449,18 +613,54 @@ class SqliteLocalStore implements LocalStore {
   }
 
   @override
-  Future<void> upsertPet(PetState pet) => _db.insert(
-        'pets',
-        {
-          'chat_id': pet.chatId,
-          'state': jsonEncode(pet.toJson()),
-          'updated_at': pet.revision,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  Future<void> upsertPet(PetState pet) => _db.insert('pets', {
+    'chat_id': pet.chatId,
+    'state': jsonEncode(pet.toJson()),
+    'updated_at': pet.revision,
+    'scope': pet.chatId.startsWith('personal:')
+        ? 'personal'
+        : pet.chatId.startsWith('direct:')
+        ? 'direct'
+        : 'group',
+    'status': 'active',
+    'membership_state': 'active',
+    'role': 'owner',
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
 
   @override
   Future<PetState?> getPet(String chatId) async {
+    final record = await getPetRecord(chatId);
+    return record?.state;
+  }
+
+  @override
+  Future<void> upsertPetRecord(PetRecord record) => _db.insert('pets', {
+    'chat_id': record.chatId,
+    'state': jsonEncode(record.state?.toJson()),
+    'updated_at': DateTime.now().millisecondsSinceEpoch,
+    'server_id': record.id,
+    'scope': record.scope.name,
+    'status': record.status,
+    'membership_state': record.membershipState,
+    'role': record.role,
+    'seq': record.seq,
+    'members': jsonEncode(
+      record.members
+          .map(
+            (member) => {
+              'userId': member.userId,
+              'role': member.role,
+              'state': member.state,
+              'name': member.name,
+            },
+          )
+          .toList(),
+    ),
+    'snapshot': record.encryptedSnapshot,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<PetRecord?> getPetRecord(String chatId) async {
     final rows = await _db.query(
       'pets',
       where: 'chat_id = ?',
@@ -468,9 +668,43 @@ class SqliteLocalStore implements LocalStore {
       limit: 1,
     );
     if (rows.isEmpty) return null;
-    final raw = jsonDecode(rows.first['state'] as String);
-    if (raw is! Map) return null;
-    return PetState.fromJson(raw.cast<String, dynamic>());
+    final row = rows.first;
+    final rawState = jsonDecode(row['state'] as String);
+    return PetRecord(
+      id: row['server_id'] as String? ?? '',
+      scope: PetScope.values.firstWhere(
+        (scope) => scope.name == row['scope'],
+        orElse: () => PetScope.direct,
+      ),
+      chatId: row['chat_id'] as String,
+      ownerId: '',
+      status: row['status'] as String? ?? 'active',
+      membershipState: row['membership_state'] as String? ?? 'active',
+      role: row['role'] as String? ?? 'owner',
+      encryptedSnapshot: row['snapshot'] as String? ?? '',
+      seq: (row['seq'] as num?)?.toInt() ?? 0,
+      members:
+          ((jsonDecode(row['members'] as String? ?? '[]') as List?) ?? const [])
+              .whereType<Map>()
+              .map(
+                (member) => PetMember.fromJson(member.cast<String, dynamic>()),
+              )
+              .toList(),
+      state: rawState is Map
+          ? PetState.fromJson(rawState.cast<String, dynamic>())
+          : null,
+    );
+  }
+
+  @override
+  Future<List<PetRecord>> getPetRecords() async {
+    final rows = await _db.query('pets', orderBy: 'updated_at DESC');
+    final records = <PetRecord>[];
+    for (final row in rows) {
+      final record = await getPetRecord(row['chat_id'] as String);
+      if (record != null) records.add(record);
+    }
+    return records;
   }
 
   @override
@@ -478,29 +712,78 @@ class SqliteLocalStore implements LocalStore {
       _db.delete('pets', where: 'chat_id = ?', whereArgs: [chatId]);
 
   @override
-  Future<void> enqueueOutbox(OutboxItem item) => _db.insert(
-        'outbox',
-        {
-          'id': item.id,
-          'chat_id': item.chatId,
-          'payload': jsonEncode(item.payload),
-          'created_at': item.createdAt.millisecondsSinceEpoch,
-          'attempts': item.attempts,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  Future<void> deletePetRecord(String petId) async {
+    await _db.delete('pets', where: 'server_id = ?', whereArgs: [petId]);
+    await _db.delete('pet_outbox', where: 'pet_id = ?', whereArgs: [petId]);
+  }
+
+  @override
+  Future<void> enqueuePetOperation(PetOutboxItem item) =>
+      _db.insert('pet_outbox', {
+        'id': item.id,
+        'pet_id': item.petId,
+        'action': item.action,
+        'payload': item.payload,
+        'created_at': item.createdAt.millisecondsSinceEpoch,
+        'attempts': item.attempts,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<List<PetOutboxItem>> getPetOperations() async {
+    final rows = await _db.query('pet_outbox', orderBy: 'created_at ASC');
+    return rows
+        .map(
+          (row) => PetOutboxItem(
+            id: row['id'] as String,
+            petId: row['pet_id'] as String,
+            action: row['action'] as String,
+            payload: row['payload'] as String,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(
+              row['created_at'] as int,
+            ),
+            attempts: (row['attempts'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> removePetOperation(String id) =>
+      _db.delete('pet_outbox', where: 'id = ?', whereArgs: [id]);
+
+  @override
+  Future<void> bumpPetOperationAttempts(String id) async {
+    await _db.rawUpdate(
+      'UPDATE pet_outbox SET attempts = attempts + 1 WHERE id = ?',
+      [id],
+    );
+  }
+
+  @override
+  Future<void> enqueueOutbox(OutboxItem item) => _db.insert('outbox', {
+    'id': item.id,
+    'chat_id': item.chatId,
+    'payload': jsonEncode(item.payload),
+    'created_at': item.createdAt.millisecondsSinceEpoch,
+    'attempts': item.attempts,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
 
   @override
   Future<List<OutboxItem>> getOutbox() async {
     final rows = await _db.query('outbox', orderBy: 'created_at ASC');
     return rows
-        .map((row) => OutboxItem(
-              id: row['id'] as String,
-              chatId: row['chat_id'] as String,
-              payload: jsonDecode(row['payload'] as String) as Map<String, dynamic>,
-              createdAt: DateTime.fromMillisecondsSinceEpoch((row['created_at'] as num).toInt()),
-              attempts: (row['attempts'] as num?)?.toInt() ?? 0,
-            ))
+        .map(
+          (row) => OutboxItem(
+            id: row['id'] as String,
+            chatId: row['chat_id'] as String,
+            payload:
+                jsonDecode(row['payload'] as String) as Map<String, dynamic>,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(
+              (row['created_at'] as num).toInt(),
+            ),
+            attempts: (row['attempts'] as num?)?.toInt() ?? 0,
+          ),
+        )
         .toList();
   }
 
@@ -509,6 +792,8 @@ class SqliteLocalStore implements LocalStore {
       _db.delete('outbox', where: 'id = ?', whereArgs: [id]);
 
   @override
-  Future<void> bumpOutboxAttempts(String id) =>
-      _db.rawUpdate('UPDATE outbox SET attempts = attempts + 1 WHERE id = ?', [id]);
+  Future<void> bumpOutboxAttempts(String id) => _db.rawUpdate(
+    'UPDATE outbox SET attempts = attempts + 1 WHERE id = ?',
+    [id],
+  );
 }

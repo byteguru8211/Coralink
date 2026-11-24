@@ -237,6 +237,7 @@ function createHttpHandler({
   config,
   db,
   hub,
+  petStore,
   logger = createLogger({ level: config.logLevel }),
 }) {
   const limiter = new RateLimiter();
@@ -320,6 +321,7 @@ function createHttpHandler({
         config,
         db,
         hub,
+        petStore,
         logger,
       };
 

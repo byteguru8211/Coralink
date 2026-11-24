@@ -25,7 +25,13 @@ void main() {
       IdentityKey(Curve.decodePoint(base64Decode(bundle.identityKey), 0)),
     );
 
-    await SessionBuilder(bob, bob, bob, bob, aliceAddress).processPreKeyBundle(preKeyBundle);
+    await SessionBuilder(
+      bob,
+      bob,
+      bob,
+      bob,
+      aliceAddress,
+    ).processPreKeyBundle(preKeyBundle);
 
     final bobCipher = SessionCipher.fromStore(bob, aliceAddress);
     final first = await bobCipher.encrypt(
@@ -52,12 +58,35 @@ void main() {
     expect(await alice.containsPreKey(oneTime.id), isFalse);
   });
 
+  test('published one-time prekeys are not advertised again', () async {
+    final store = PersistentSignalStore.create();
+    final first = store.preKeys.keys.first;
+    await store.markPreKeysPublished([first]);
+    final restored = PersistentSignalStore.fromJson(store.toJson());
+    expect(restored.unpublishedPreKeys(), hasLength(99));
+    expect(restored.publicBundle().preKeys, hasLength(100));
+  });
+
+  test('legacy state treats surviving prekeys as already published', () {
+    final store = PersistentSignalStore.create();
+    final json = Map<String, dynamic>.from(jsonDecode(store.toJson()) as Map)
+      ..remove('publishedPreKeyIds');
+    final restored = PersistentSignalStore.fromJson(jsonEncode(json));
+    expect(restored.unpublishedPreKeys(), isEmpty);
+  });
+
   test('Signal store survives JSON round-trip', () {
     final store = PersistentSignalStore.create();
     final restored = PersistentSignalStore.fromJson(store.toJson());
     expect(restored.registrationId, store.registrationId);
-    expect(restored.identityKeyPair.serialize(), store.identityKeyPair.serialize());
+    expect(
+      restored.identityKeyPair.serialize(),
+      store.identityKeyPair.serialize(),
+    );
     expect(restored.preKeys.length, store.preKeys.length);
-    expect(restored.publicBundle().identityKey, store.publicBundle().identityKey);
+    expect(
+      restored.publicBundle().identityKey,
+      store.publicBundle().identityKey,
+    );
   });
 }

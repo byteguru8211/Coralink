@@ -15,6 +15,7 @@ import '../../services/audio_service.dart';
 import '../../services/message_service.dart';
 import '../controllers.dart';
 import '../widgets/coral_widgets.dart';
+import '../widgets/pet_widgets.dart';
 import 'call_screen.dart';
 import 'chat_screen.dart';
 import 'chats_screen.dart';
@@ -39,6 +40,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final client = ref.read(clientProvider);
     _incomingSub = client.messages.incoming.listen(_onIncoming);
     _groupSub = client.messages.groupEvents.listen(_onGroupAdded);
+    client.messages.start();
   }
 
   @override
@@ -99,55 +101,71 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   Future<void> _onIncoming(IncomingEvent event) async {
     if (!mounted) return;
-    // Suppress only when the user is actively viewing that chat in the
-    // foreground. Once the app is backgrounded, the last-open chat should still
-    // raise notifications, matching messenger expectations.
     final resumed = _inForeground;
     if (event.isActiveChat && resumed) return;
     final client = ref.read(clientProvider);
     final settings = ref.read(settingsProvider);
     final chat = await client.store.getChat(event.message.chatId);
     if (chat?.muted == true) return;
-    await ref.read(audioProvider).playCue(SoundCue.receive, settings.receiveSoundId);
+    final sender = event.message.senderId == client.messages.myId
+        ? null
+        : await client.store.getUser(event.message.senderId);
     final name = chat?.peerName ?? 'Coralink';
-    final english = settings.localeCode == 'en';
-    final preview = event.message.isSticker
-        ? (english ? 'Sticker' : 'Стикер')
-        : event.message.isPet
-            ? (english ? 'Tamagotchi' : 'Тамагочи')
-        : event.message.isImage
-            ? (english ? 'Photo' : 'Фото')
-            : event.message.text;
+    final title = chat?.isGroup == true && sender != null
+        ? '$name · ${sender.name}'
+        : name;
+    final preview = _messagePreview(event.message, settings.localeCode == 'en');
     if (resumed) {
+      if (settings.notificationMode != NotificationMode.minimal) {
+        await ref
+            .read(audioProvider)
+            .playCue(SoundCue.receive, settings.receiveSoundId);
+      }
       _banner(
-        title: name,
+        title: title,
         body: truncate(preview, 140),
         onOpen: () => _openChat(event.message.chatId, chat?.peerName),
       );
       return;
     }
-    if (settings.notificationMode != NotificationMode.offline) {
-      await ref.read(notificationProvider).show(
-            chatId: event.message.chatId,
-            title: name,
-            body: truncate(preview, 140),
-            mode: settings.notificationMode,
-          );
-    }
+    if (settings.notificationMode == NotificationMode.offline) return;
+    await ref
+        .read(notificationProvider)
+        .show(
+          chatId: event.message.chatId,
+          title: title,
+          body: truncate(preview, 140),
+          mode: settings.notificationMode,
+        );
   }
 
-  /// Somebody added this account to a group: refresh the list (the chat row is
-  /// already stored) and tell the user, in-app or in the notification tray.
+  String _messagePreview(Message message, bool english) {
+    if (message.isSticker) return english ? 'Sticker' : 'Стикер';
+    if (message.isPet) return english ? 'Tamagotchi' : 'Тамагочи';
+    if (message.isImage) return english ? 'Photo' : 'Фото';
+    if (message.isFile) return english ? 'File' : 'Файл';
+    if (message.isAudio)
+      return english ? 'Voice message' : 'Голосовое сообщение';
+    if (message.isVideo) return english ? 'Video' : 'Видео';
+    if (message.isVideoNote) return english ? 'Video note' : 'Видеокружок';
+    return message.text;
+  }
+
   Future<void> _onGroupAdded(GroupAddedEvent event) async {
     if (!mounted) return;
     await ref.read(chatsProvider.notifier).refresh();
     if (!mounted) return;
     final settings = ref.read(settingsProvider);
     final strings = ref.read(stringsProvider);
-    if (event.title.isEmpty) return;
-    await ref.read(audioProvider).playCue(SoundCue.receive, settings.receiveSoundId);
+    final chat = await ref.read(clientProvider).store.getChat(event.groupId);
+    if (chat?.muted == true || event.title.isEmpty) return;
     final body = strings.get('addedToGroup').replaceAll('{title}', event.title);
     if (_inForeground) {
+      if (settings.notificationMode != NotificationMode.minimal) {
+        await ref
+            .read(audioProvider)
+            .playCue(SoundCue.receive, settings.receiveSoundId);
+      }
       _banner(
         title: strings.get('newGroup'),
         body: body,
@@ -155,14 +173,23 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       );
       return;
     }
-    if (settings.notificationMode != NotificationMode.offline) {
-      await ref.read(notificationProvider).show(
-            chatId: event.groupId,
-            title: strings.get('newGroup'),
-            body: body,
-            mode: settings.notificationMode,
-          );
-    }
+    if (settings.notificationMode == NotificationMode.offline) return;
+    await ref
+        .read(notificationProvider)
+        .show(
+          chatId: event.groupId,
+          title: strings.get('newGroup'),
+          body: body,
+          mode: settings.notificationMode,
+        );
+  }
+
+  Future<void> _showCallNotification(String peerId) async {
+    final user = await ref.read(clientProvider).store.getUser(peerId);
+    if (!mounted) return;
+    await ref
+        .read(notificationProvider)
+        .showCall(peerId: peerId, name: user?.name ?? 'Coralink');
   }
 
   @override
@@ -176,21 +203,25 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       final status = next.value;
       final wasIncoming = previous?.value == CallStatus.incoming;
       if (status == CallStatus.incoming && !wasIncoming) {
-        // A banner must not cover the answer/decline buttons of the call UI.
         ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
         final settings = ref.read(settingsProvider);
-        ref.read(audioProvider).playCue(SoundCue.call, settings.callSoundId);
         final peerId = ref.read(callProvider).peerId;
-        if (peerId != null) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => CallScreen(peerId: peerId)),
-          );
+        if (_inForeground && peerId != null) {
+          ref.read(audioProvider).playCue(SoundCue.call, settings.callSoundId);
+          Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => CallScreen(peerId: peerId)));
+        } else if (peerId != null) {
+          unawaited(_showCallNotification(peerId));
         }
       } else if (status == CallStatus.outgoing &&
-          previous?.value != CallStatus.outgoing) {
+          previous?.value != CallStatus.outgoing &&
+          _inForeground) {
         ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
         final settings = ref.read(settingsProvider);
         ref.read(audioProvider).playCue(SoundCue.call, settings.callSoundId);
+      } else if (wasIncoming && status != CallStatus.incoming) {
+        unawaited(ref.read(notificationProvider).cancelCall());
       }
     });
 
@@ -201,6 +232,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           children: const [
             ChatsScreen(),
             ContactsScreen(),
+            PersonalPetScreen(),
             SettingsScreen(),
           ],
         ),
@@ -238,11 +270,19 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 label: strings.get('contactsTab'),
               ),
               BottomNavigationBarItem(
+                icon: _NavIcon(icon: Icons.spa_outlined, active: _index == 2),
+                activeIcon: _NavIcon(icon: Icons.spa_rounded, active: true),
+                label: strings.get('petTab'),
+              ),
+              BottomNavigationBarItem(
                 icon: _NavIcon(
                   icon: Icons.settings_outlined,
-                  active: _index == 2,
+                  active: _index == 3,
                 ),
-                activeIcon: _NavIcon(icon: Icons.settings_rounded, active: true),
+                activeIcon: _NavIcon(
+                  icon: Icons.settings_rounded,
+                  active: true,
+                ),
                 label: strings.get('settingsTab'),
               ),
             ],
@@ -253,8 +293,37 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   }
 }
 
+class PersonalPetScreen extends ConsumerWidget {
+  const PersonalPetScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final userId = ref.watch(sessionProvider).user?.id ?? '';
+    final strings = ref.watch(stringsProvider);
+    return Scaffold(
+      appBar: AppBar(title: Text(strings.get('petPersonalTitle'))),
+      body: CoralBackground(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
+          children: [
+            PetPanel(
+              chatId: 'personal:$userId',
+              strings: strings,
+              personal: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _NavIcon extends StatelessWidget {
-  const _NavIcon({required this.icon, required this.active, this.badge = false});
+  const _NavIcon({
+    required this.icon,
+    required this.active,
+    this.badge = false,
+  });
   final IconData icon;
   final bool active;
   final bool badge;
@@ -265,7 +334,11 @@ class _NavIcon extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Icon(icon, size: 24, color: active ? palette.accent : palette.textMuted),
+        Icon(
+          icon,
+          size: 24,
+          color: active ? palette.accent : palette.textMuted,
+        ),
         if (badge)
           Positioned(
             right: -3,
@@ -277,7 +350,10 @@ class _NavIcon extends StatelessWidget {
                 color: palette.accent,
                 shape: BoxShape.circle,
                 boxShadow: [
-                  BoxShadow(color: palette.accent.withValues(alpha: 0.7), blurRadius: 6),
+                  BoxShadow(
+                    color: palette.accent.withValues(alpha: 0.7),
+                    blurRadius: 6,
+                  ),
                 ],
               ),
             ),

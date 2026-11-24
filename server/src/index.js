@@ -11,6 +11,8 @@ const { registerGroupRoutes } = require('./routes/groups');
 const { registerKeyRoutes } = require('./routes/keys');
 const { registerMessageRoutes } = require('./routes/messages');
 const { registerPushRoutes } = require('./routes/push');
+const { registerPetRoutes } = require('./routes/pets');
+const { PetStore } = require('./pet_store');
 const { registerUserRoutes } = require('./routes/users');
 const { createHub } = require('./ws/hub');
 
@@ -24,6 +26,7 @@ function createApp(options = {}) {
     });
   const db = createDatabase(config.dbPath);
   const hub = createHub({ db, config, logger });
+  const petStore = new PetStore(db);
 
   const router = new Router();
   registerAuthRoutes(router);
@@ -33,6 +36,7 @@ function createApp(options = {}) {
   registerBackupRoutes(router);
   registerMessageRoutes(router);
   registerPushRoutes(router);
+  registerPetRoutes(router);
 
   router.add('GET', '/health', async (context) => {
     sendJson(context.res, 200, {
@@ -46,6 +50,7 @@ function createApp(options = {}) {
     config,
     db,
     hub,
+    petStore,
     logger,
   });
   const server = http.createServer(handler);
@@ -122,6 +127,7 @@ function createApp(options = {}) {
     config,
     db,
     hub,
+    petStore,
     logger,
     router,
     server,

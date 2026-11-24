@@ -15,7 +15,9 @@ class RealtimeEvent {
 
   String? get stringId => data['id'] as String?;
   List<String> get ids =>
-      (data['ids'] as List?)?.map((e) => e as String).toList() ?? const [];
+      (data['ids'] as List?)?.map((e) => e as String).toList() ??
+      (data['messageIds'] as List?)?.map((e) => e as String).toList() ??
+      const [];
 }
 
 class RealtimeService {
@@ -48,7 +50,9 @@ class RealtimeService {
   Future<void> connect() async {
     if (_closed) return;
     _reconnectTimer?.cancel();
-    _setStatus(_attempt == 0 ? RealtimeStatus.connecting : RealtimeStatus.reconnecting);
+    _setStatus(
+      _attempt == 0 ? RealtimeStatus.connecting : RealtimeStatus.reconnecting,
+    );
     try {
       final uri = Uri.parse(_url).replace(queryParameters: {'token': _token});
       final channel = WebSocketChannel.connect(uri);
@@ -66,7 +70,10 @@ class RealtimeService {
         cancelOnError: true,
       );
       _heartbeat?.cancel();
-      _heartbeat = Timer.periodic(const Duration(seconds: 25), (_) => sendRaw({'type': 'ping'}));
+      _heartbeat = Timer.periodic(
+        const Duration(seconds: 25),
+        (_) => sendRaw({'type': 'ping'}),
+      );
     } catch (error) {
       Log.e('ws', error);
       _scheduleReconnect();
@@ -108,6 +115,27 @@ class RealtimeService {
     }
   }
 
+  Future<bool> sendAndWaitForAck(
+    Map<String, dynamic> payload,
+    String messageId,
+  ) async {
+    if (!isConnected) return false;
+    final completer = Completer<bool>();
+    final subscription = _events.stream.listen((event) {
+      if (event.type == 'message.ack' && event.data['id'] == messageId) {
+        if (!completer.isCompleted) completer.complete(true);
+      }
+    });
+    try {
+      sendRaw(payload);
+      return await completer.future.timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      return false;
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   void sendMessage({
     required String id,
     required String to,
@@ -115,16 +143,15 @@ class RealtimeService {
     required String kind,
     required Map<String, dynamic> meta,
     required DateTime createdAt,
-  }) =>
-      sendRaw({
-        'type': 'message',
-        'id': id,
-        'to': to,
-        'ciphertext': ciphertext,
-        'kind': kind,
-        'meta': meta,
-        'createdAt': createdAt.millisecondsSinceEpoch,
-      });
+  }) => sendRaw({
+    'type': 'message',
+    'id': id,
+    'to': to,
+    'ciphertext': ciphertext,
+    'kind': kind,
+    'meta': meta,
+    'createdAt': createdAt.millisecondsSinceEpoch,
+  });
 
   void ackMessages(List<String> ids) {
     if (ids.isEmpty) return;
@@ -149,16 +176,15 @@ class RealtimeService {
     required String kind,
     required Map<String, dynamic> meta,
     required DateTime createdAt,
-  }) =>
-      sendRaw({
-        'type': 'group.send',
-        'id': id,
-        'groupId': groupId,
-        'ciphertext': ciphertext,
-        'kind': kind,
-        'meta': meta,
-        'createdAt': createdAt.millisecondsSinceEpoch,
-      });
+  }) => sendRaw({
+    'type': 'group.send',
+    'id': id,
+    'groupId': groupId,
+    'ciphertext': ciphertext,
+    'kind': kind,
+    'meta': meta,
+    'createdAt': createdAt.millisecondsSinceEpoch,
+  });
 
   void markGroupRead(String groupId, List<String> ids) {
     if (ids.isEmpty) return;
@@ -168,7 +194,8 @@ class RealtimeService {
   void typing(String to, bool on) =>
       sendRaw({'type': 'typing', 'to': to, 'on': on});
 
-  void setPresence(String status) => sendRaw({'type': 'presence', 'status': status});
+  void setPresence(String status) =>
+      sendRaw({'type': 'presence', 'status': status});
 
   bool _disposed = false;
 

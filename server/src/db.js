@@ -114,8 +114,48 @@ CREATE TABLE IF NOT EXISTS key_backup (
   user_id TEXT PRIMARY KEY,
   blob TEXT NOT NULL,
   salt TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS pets (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  snapshot TEXT NOT NULL DEFAULT '',
+  snapshot_seq INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pet_members (
+  pet_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  state TEXT NOT NULL,
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY(pet_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS pet_operations (
+  id TEXT PRIMARY KEY,
+  pet_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(pet_id, seq)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pets_personal
+  ON pets(owner_id) WHERE scope = 'personal' AND status != 'archived';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pets_scope_chat
+  ON pets(scope, chat_id) WHERE status != 'archived';
+CREATE INDEX IF NOT EXISTS idx_pet_members_user ON pet_members(user_id, state);
+CREATE INDEX IF NOT EXISTS idx_pet_operations_pet ON pet_operations(pet_id, seq);
 
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_delivered
   ON messages(recipient_id, delivered_at);
@@ -239,6 +279,10 @@ class CoralinkDatabase {
     if (!userColumns.some((column) => column.name === 'password_hash')) {
       this.db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
     }
+    const backupColumns = this.db.prepare('PRAGMA table_info(key_backup)').all();
+    if (!backupColumns.some((column) => column.name === 'revision')) {
+      this.db.exec('ALTER TABLE key_backup ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+    }
     // Legacy databases declared phone as NOT NULL, which rejects nickname-only
     // accounts. SQLite cannot drop a constraint in place, so rebuild the table.
     const phoneColumn = this.db
@@ -346,8 +390,8 @@ class CoralinkDatabase {
             signed_prekey_signature = ?
         WHERE id = ?
       `),
-      upsertPreKey: this.db.prepare(`
-        INSERT OR REPLACE INTO prekeys (user_id, key_id, public_key)
+      insertPreKey: this.db.prepare(`
+        INSERT OR IGNORE INTO prekeys (user_id, key_id, public_key)
         VALUES (?, ?, ?)
       `),
       firstPreKey: this.db.prepare(`
@@ -606,6 +650,23 @@ class CoralinkDatabase {
     this.stmts.deleteAuthCode.run(phone);
   }
 
+  preKeyCount(userId) {
+    return Number(
+      this.db.prepare('SELECT COUNT(*) AS count FROM prekeys WHERE user_id = ?').get(userId).count,
+    );
+  }
+
+  getPublicKeyInfo(userId) {
+    const user = this.getUserById(userId);
+    if (!user || !user.identityKey) return null;
+    return {
+      userId: user.id,
+      identityKey: user.identityKey,
+      registrationId: user.registrationId,
+      signedPreKeyId: user.signedPreKeyId,
+    };
+  }
+
   saveKeys(
     userId,
     { identityKey, registrationId, signedPreKey, preKeys },
@@ -620,7 +681,7 @@ class CoralinkDatabase {
         userId,
       );
       for (const preKey of preKeys) {
-        this.stmts.upsertPreKey.run(userId, preKey.id, preKey.publicKey);
+        this.stmts.insertPreKey.run(userId, preKey.id, preKey.publicKey);
       }
     });
   }
@@ -628,23 +689,38 @@ class CoralinkDatabase {
   // Encrypted Signal-state backup: the server stores only an opaque ciphertext
   // blob + KDF salt. It cannot read the keys; a new device decrypts them with a
   // key derived from the account password.
-  saveBackup(userId, blob, salt, updatedAt) {
-    this.db
-      .prepare(
-        `INSERT INTO key_backup (user_id, blob, salt, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-           blob = excluded.blob, salt = excluded.salt, updated_at = excluded.updated_at`,
-      )
-      .run(userId, blob, salt, updatedAt);
+  saveBackup(userId, blob, salt, updatedAt, revision = 0) {
+    return this.transaction(() => {
+      const current = this.db
+        .prepare('SELECT revision FROM key_backup WHERE user_id = ?')
+        .get(userId);
+      if (current && Number(current.revision) > revision) {
+        return { saved: false, revision: Number(current.revision) };
+      }
+      this.db
+        .prepare(
+          `INSERT INTO key_backup (user_id, blob, salt, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             blob = excluded.blob, salt = excluded.salt,
+             updated_at = excluded.updated_at, revision = excluded.revision`,
+        )
+        .run(userId, blob, salt, updatedAt, revision);
+      return { saved: true, revision };
+    });
   }
 
   getBackup(userId) {
     const row = this.db
-      .prepare('SELECT blob, salt, updated_at FROM key_backup WHERE user_id = ?')
+      .prepare('SELECT blob, salt, updated_at, revision FROM key_backup WHERE user_id = ?')
       .get(userId);
     if (!row) return null;
-    return { blob: row.blob, salt: row.salt, updatedAt: Number(row.updated_at) };
+    return {
+      blob: row.blob,
+      salt: row.salt,
+      updatedAt: Number(row.updated_at),
+      revision: Number(row.revision || 0),
+    };
   }
 
   deleteBackup(userId) {
@@ -654,7 +730,7 @@ class CoralinkDatabase {
   replenishPreKeys(userId, preKeys) {
     this.transaction(() => {
       for (const preKey of preKeys) {
-        this.stmts.upsertPreKey.run(userId, preKey.id, preKey.publicKey);      }
+        this.stmts.insertPreKey.run(userId, preKey.id, preKey.publicKey);      }
     });
   }
 
@@ -745,6 +821,50 @@ class CoralinkDatabase {
         messageIds,
       })),
     };
+  }
+
+  getMessageStatusesForSender(userId, ids) {
+    const statuses = [];
+    const direct = this.db.prepare(
+      'SELECT id, delivered_at, read_at FROM messages WHERE id = ? AND sender_id = ?',
+    );
+    const group = this.db.prepare(
+      `SELECT m.id,
+              EXISTS(SELECT 1 FROM group_message_receipts r
+                     WHERE r.message_id = m.id AND r.delivered_at IS NOT NULL) AS is_delivered,
+              EXISTS(SELECT 1 FROM group_message_receipts r
+                     WHERE r.message_id = m.id AND r.read_at IS NOT NULL) AS is_read
+       FROM group_messages m
+       JOIN group_members membership ON membership.group_id = m.group_id
+         AND membership.user_id = ?
+       WHERE m.id = ? AND m.sender_id = ?`,
+    );
+    for (const id of ids) {
+      const message = direct.get(id, userId);
+      if (message) {
+        statuses.push({
+          id,
+          status: message.read_at != null
+            ? 'read'
+            : message.delivered_at != null
+              ? 'delivered'
+              : 'sent',
+        });
+        continue;
+      }
+      const groupMessage = group.get(userId, id, userId);
+      if (groupMessage) {
+        statuses.push({
+          id,
+          status: groupMessage.is_read
+            ? 'read'
+            : groupMessage.is_delivered
+              ? 'delivered'
+              : 'sent',
+        });
+      }
+    }
+    return statuses;
   }
 
   markMessagesRead(userId, chatWith, ids, now = Date.now()) {
@@ -890,11 +1010,29 @@ class CoralinkDatabase {
   }
 
   removeGroupMember(groupId, userId) {
-    return (
-      this.db
+    return this.transaction(() => {
+      const removed = this.db
         .prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?')
-        .run(groupId, userId).changes > 0
-    );
+        .run(groupId, userId).changes > 0;
+      if (removed) {
+        this.db
+          .prepare(
+            `DELETE FROM group_message_receipts
+             WHERE user_id = ? AND message_id IN (
+               SELECT id FROM group_messages WHERE group_id = ?
+             )`,
+          )
+          .run(userId, groupId);
+        this.db
+          .prepare(
+            `DELETE FROM pet_members WHERE user_id = ? AND pet_id IN (
+               SELECT id FROM pets WHERE scope = 'group' AND chat_id = ?
+             )`,
+          )
+          .run(userId, groupId);
+      }
+      return removed;
+    });
   }
 
   insertGroupMessage({
@@ -910,8 +1048,10 @@ class CoralinkDatabase {
   }) {
     const serializedMeta =
       typeof meta === 'string' ? meta : JSON.stringify(meta || {});
+    let inserted = false;
+    let message = null;
     this.transaction(() => {
-      this.db
+      const result = this.db
         .prepare(
           `INSERT OR IGNORE INTO group_messages
             (id, group_id, sender_id, ciphertext, kind, meta, created_at, expires_at)
@@ -927,6 +1067,11 @@ class CoralinkDatabase {
           createdAt,
           expiresAt,
         );
+      inserted = result.changes > 0;
+      message = mapGroupMessage(
+        this.db.prepare('SELECT * FROM group_messages WHERE id = ?').get(id),
+      );
+      if (!inserted) return;
       const receipt = this.db.prepare(
         'INSERT OR IGNORE INTO group_message_receipts (message_id, user_id, delivered_at, read_at) VALUES (?, ?, NULL, NULL)',
       );
@@ -935,6 +1080,7 @@ class CoralinkDatabase {
         receipt.run(id, userId);
       }
     });
+    return { inserted, message };
   }
 
   getPendingGroupMessages(userId, now = Date.now(), limit = 500) {
@@ -942,6 +1088,8 @@ class CoralinkDatabase {
       .prepare(
         `SELECT m.* FROM group_messages m
          JOIN group_message_receipts r ON r.message_id = m.id
+         JOIN group_members membership ON membership.group_id = m.group_id
+           AND membership.user_id = r.user_id
          WHERE r.user_id = ? AND r.delivered_at IS NULL AND m.expires_at > ?
          ORDER BY m.created_at ASC, m.id ASC
          LIMIT ?`,
@@ -980,15 +1128,20 @@ class CoralinkDatabase {
     };
   }
 
-  markGroupMessagesRead(userId, ids, now = Date.now()) {
+  markGroupMessagesRead(userId, ids, now = Date.now(), groupId = null) {
     const readIds = [];
     this.transaction(() => {
       for (const id of ids) {
         const res = this.db
           .prepare(
-            'UPDATE group_message_receipts SET read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE message_id = ? AND user_id = ? AND read_at IS NULL',
+            `UPDATE group_message_receipts
+             SET read_at = ?, delivered_at = COALESCE(delivered_at, ?)
+             WHERE message_id = ? AND user_id = ? AND read_at IS NULL
+               AND (? IS NULL OR message_id IN (
+                 SELECT id FROM group_messages WHERE group_id = ?
+               ))`,
           )
-          .run(now, now, id, userId);
+          .run(now, now, id, userId, groupId, groupId);
         if (res.changes > 0) readIds.push(id);
       }
     });
@@ -1036,6 +1189,27 @@ class CoralinkDatabase {
       this.db.prepare('DELETE FROM push_tokens WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM key_backup WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM auth_codes WHERE phone = ?').run(user.phone);
+      this.db
+        .prepare(
+          `DELETE FROM pet_operations WHERE pet_id IN (
+             SELECT id FROM pets WHERE owner_id = ? OR id IN (
+               SELECT pet_id FROM pet_members WHERE user_id = ?
+             )
+           )`,
+        )
+        .run(id, id);
+      this.db
+        .prepare(
+          `DELETE FROM pets WHERE owner_id = ? OR id IN (
+             SELECT pet_id FROM pet_members WHERE user_id = ?
+           )`,
+        )
+        .run(id, id);
+      this.db
+        .prepare(
+          'DELETE FROM pet_members WHERE user_id = ? OR pet_id NOT IN (SELECT id FROM pets)',
+        )
+        .run(id);
       // Group membership: drop the user's receipts and membership rows.
       this.db
         .prepare('DELETE FROM group_message_receipts WHERE user_id = ?')

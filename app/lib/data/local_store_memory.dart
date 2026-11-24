@@ -12,6 +12,9 @@ class MemoryLocalStore implements LocalStore {
   final _outbox = <String, OutboxItem>{};
   final _calls = <CallRecord>[];
   final _pets = <String, PetState>{};
+  final _petRecords = <String, PetRecord>{};
+  final _petOutbox = <String, PetOutboxItem>{};
+  final _pendingReads = <String, PendingReadReceipt>{};
 
   @override
   Future<void> close() async {}
@@ -25,6 +28,9 @@ class MemoryLocalStore implements LocalStore {
     _outbox.clear();
     _calls.clear();
     _pets.clear();
+    _petRecords.clear();
+    _petOutbox.clear();
+    _pendingReads.clear();
   }
 
   @override
@@ -67,7 +73,11 @@ class MemoryLocalStore implements LocalStore {
   }) async {
     final chat = _chats[id];
     if (chat == null) return;
-    _chats[id] = chat.copyWith(archived: archived, pinned: pinned, muted: muted);
+    _chats[id] = chat.copyWith(
+      archived: archived,
+      pinned: pinned,
+      muted: muted,
+    );
   }
 
   @override
@@ -111,7 +121,8 @@ class MemoryLocalStore implements LocalStore {
   }
 
   @override
-  Future<void> upsertMessage(Message message) async => _messages[message.id] = message;
+  Future<void> upsertMessage(Message message) async =>
+      _messages[message.id] = message;
 
   @override
   Future<Message?> getMessage(String id) async => _messages[id];
@@ -132,20 +143,22 @@ class MemoryLocalStore implements LocalStore {
     int offset = 0,
     bool includeArchived = false,
   }) async {
-    final list = _messages.values
-        .where((m) => m.chatId == chatId && (includeArchived || !m.archived))
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final list =
+        _messages.values
+            .where(
+              (m) => m.chatId == chatId && (includeArchived || !m.archived),
+            )
+            .toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final page = list.skip(offset).take(limit).toList().reversed.toList();
     return page;
   }
 
   @override
   Future<List<Message>> getAllMessages({int limit = 4000}) async {
-    final list = _messages.values
-        .where((m) => !m.deleted && !m.isControl)
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final list =
+        _messages.values.where((m) => !m.deleted && !m.isControl).toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list.take(limit).toList();
   }
 
@@ -156,11 +169,17 @@ class MemoryLocalStore implements LocalStore {
     DateTime? at,
   }) async {
     final message = _messages[id];
-    if (message == null) return;
+    if (message == null || status.index < message.status.index) return;
     _messages[id] = message.copyWith(
       status: status,
-      deliveredAt: status == MessageStatus.delivered ? (at ?? DateTime.now()) : null,
-      readAt: status == MessageStatus.read ? (at ?? DateTime.now()) : null,
+      deliveredAt: status == MessageStatus.delivered
+          ? (at ?? DateTime.now())
+          : status == MessageStatus.read
+          ? (message.deliveredAt ?? at ?? DateTime.now())
+          : message.deliveredAt,
+      readAt: status == MessageStatus.read
+          ? (at ?? DateTime.now())
+          : message.readAt,
     );
   }
 
@@ -170,7 +189,11 @@ class MemoryLocalStore implements LocalStore {
     for (final id in ids) {
       final m = _messages[id];
       if (m != null) {
-        _messages[id] = m.copyWith(status: MessageStatus.read, readAt: stamp, deliveredAt: m.deliveredAt ?? stamp);
+        _messages[id] = m.copyWith(
+          status: MessageStatus.read,
+          readAt: stamp,
+          deliveredAt: m.deliveredAt ?? stamp,
+        );
       }
     }
   }
@@ -181,7 +204,10 @@ class MemoryLocalStore implements LocalStore {
     for (final id in ids) {
       final m = _messages[id];
       if (m != null && m.status != MessageStatus.read) {
-        _messages[id] = m.copyWith(status: MessageStatus.delivered, deliveredAt: m.deliveredAt ?? stamp);
+        _messages[id] = m.copyWith(
+          status: MessageStatus.delivered,
+          deliveredAt: m.deliveredAt ?? stamp,
+        );
       }
     }
   }
@@ -196,7 +222,10 @@ class MemoryLocalStore implements LocalStore {
   Future<void> deleteMessage(String id) async => _messages.remove(id);
 
   @override
-  Future<void> setReactions(String id, Map<String, List<String>> reactions) async {
+  Future<void> setReactions(
+    String id,
+    Map<String, List<String>> reactions,
+  ) async {
     final m = _messages[id];
     if (m != null) _messages[id] = m.copyWith(reactions: reactions);
   }
@@ -221,12 +250,18 @@ class MemoryLocalStore implements LocalStore {
 
   @override
   Future<void> upsertContact(User user, {DateTime? addedAt}) async =>
-      _contacts[user.id] = Contact(user: user, addedAt: addedAt ?? DateTime.now());
+      _contacts[user.id] = Contact(
+        user: user,
+        addedAt: addedAt ?? DateTime.now(),
+      );
 
   @override
   Future<List<Contact>> getContacts() async {
     final list = _contacts.values.toList()
-      ..sort((a, b) => a.user.name.toLowerCase().compareTo(b.user.name.toLowerCase()));
+      ..sort(
+        (a, b) =>
+            a.user.name.toLowerCase().compareTo(b.user.name.toLowerCase()),
+      );
     return list;
   }
 
@@ -254,17 +289,117 @@ class MemoryLocalStore implements LocalStore {
   Future<void> upsertPet(PetState pet) async => _pets[pet.chatId] = pet;
 
   @override
-  Future<PetState?> getPet(String chatId) async => _pets[chatId];
+  Future<PetState?> getPet(String chatId) async =>
+      _petRecords[chatId]?.state ?? _pets[chatId];
 
   @override
-  Future<void> deletePet(String chatId) async => _pets.remove(chatId);
+  Future<void> upsertPetRecord(PetRecord record) async {
+    _petRecords[record.chatId] = record;
+    _pets.remove(record.chatId);
+  }
+
+  @override
+  Future<PetRecord?> getPetRecord(String chatId) async {
+    final record = _petRecords[chatId];
+    if (record != null) return record;
+    final pet = _pets[chatId];
+    if (pet == null) return null;
+    return PetRecord(
+      id: '',
+      scope: pet.chatId.startsWith('personal:')
+          ? PetScope.personal
+          : pet.chatId.startsWith('direct:')
+          ? PetScope.direct
+          : PetScope.group,
+      chatId: pet.chatId,
+      ownerId: pet.adopterId,
+      status: 'active',
+      membershipState: 'active',
+      role: 'owner',
+      encryptedSnapshot: '',
+      seq: 0,
+      members: const [],
+      state: pet,
+    );
+  }
+
+  @override
+  Future<List<PetRecord>> getPetRecords() async {
+    final records = _petRecords.values.toList();
+    for (final pet in _pets.values) {
+      if (!_petRecords.containsKey(pet.chatId)) {
+        records.add((await getPetRecord(pet.chatId))!);
+      }
+    }
+    return records;
+  }
+
+  @override
+  Future<void> deletePet(String chatId) async {
+    _pets.remove(chatId);
+    _petRecords.remove(chatId);
+  }
+
+  @override
+  Future<void> deletePetRecord(String petId) async {
+    _petRecords.removeWhere((_, record) => record.id == petId);
+    _petOutbox.removeWhere((_, item) => item.petId == petId);
+  }
+
+  @override
+  Future<void> enqueuePetOperation(PetOutboxItem item) async =>
+      _petOutbox[item.id] = item;
+
+  @override
+  Future<List<PetOutboxItem>> getPetOperations() async =>
+      _petOutbox.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+  @override
+  Future<void> removePetOperation(String id) async => _petOutbox.remove(id);
+
+  @override
+  Future<void> bumpPetOperationAttempts(String id) async {
+    final item = _petOutbox[id];
+    if (item == null) return;
+    _petOutbox[id] = PetOutboxItem(
+      id: item.id,
+      petId: item.petId,
+      action: item.action,
+      payload: item.payload,
+      createdAt: item.createdAt,
+      attempts: item.attempts + 1,
+    );
+  }
+
+  @override
+  Future<void> enqueueReadReceipt(String messageId, String chatId) async {
+    _pendingReads[messageId] = PendingReadReceipt(
+      messageId: messageId,
+      chatId: chatId,
+      createdAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<List<PendingReadReceipt>> getPendingReadReceipts() async =>
+      _pendingReads.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+  @override
+  Future<void> removeReadReceipts(List<String> ids) async {
+    for (final id in ids) {
+      _pendingReads.remove(id);
+    }
+  }
 
   @override
   Future<void> enqueueOutbox(OutboxItem item) async => _outbox[item.id] = item;
 
   @override
   Future<List<OutboxItem>> getOutbox() async {
-    final list = _outbox.values.toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final list = _outbox.values.toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return list;
   }
 

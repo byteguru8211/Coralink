@@ -20,10 +20,10 @@ function requireBody(context) {
   return context.body;
 }
 
-function validatePreKeys(preKeys) {
+function validatePreKeys(preKeys, { allowEmpty = false } = {}) {
   if (
     !Array.isArray(preKeys) ||
-    preKeys.length < 1 ||
+    (!allowEmpty && preKeys.length < 1) ||
     preKeys.length > MAX_PREKEYS
   ) {
     throw new HttpError(
@@ -96,7 +96,15 @@ function registerKeyRoutes(router) {
         'signedPreKey must contain id, publicKey, and signature',
       );
     }
-    const preKeys = validatePreKeys(body.preKeys);
+    const preKeys = validatePreKeys(body.preKeys, { allowEmpty: true });
+    const existing = context.db.getUserById(user.id);
+    if (existing?.identityKey && existing.identityKey !== body.identityKey) {
+      throw new HttpError(
+        409,
+        'identity_changed',
+        'The account already has a different identity key',
+      );
+    }
 
     context.db.saveKeys(user.id, {
       identityKey: body.identityKey,
@@ -117,6 +125,21 @@ function registerKeyRoutes(router) {
     const preKeys = validatePreKeys(body.preKeys);
     context.db.replenishPreKeys(user.id, preKeys);
     sendJson(context.res, 200, { ok: true, stored: preKeys.length });
+  });
+
+  router.add('GET', '/api/v1/keys/status', async (context) => {
+    const user = requireAuth(context);
+    sendJson(context.res, 200, { count: context.db.preKeyCount(user.id) });
+  });
+
+  router.add('GET', '/api/v1/keys/:userId/info', async (context) => {
+    requireAuth(context);
+    if (!isUuidLike(context.params.userId)) {
+      throw new HttpError(400, 'invalid_user_id', 'Invalid user id');
+    }
+    const info = context.db.getPublicKeyInfo(context.params.userId);
+    if (!info) throw new HttpError(404, 'no_keys', 'No keys available for this user');
+    sendJson(context.res, 200, info);
   });
 
   router.add('GET', '/api/v1/keys/:userId', async (context) => {

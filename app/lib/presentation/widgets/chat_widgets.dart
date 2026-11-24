@@ -42,7 +42,8 @@ class MessageBubble extends StatefulWidget {
   State<MessageBubble> createState() => _MessageBubbleState();
 }
 
-class _MessageBubbleState extends State<MessageBubble> with SingleTickerProviderStateMixin {
+class _MessageBubbleState extends State<MessageBubble>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 460),
@@ -87,7 +88,8 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
     }
 
     if (message.isSticker && !deleted) {
-      final sticker = stickerFromId(message.meta['sticker'] as String?) ??
+      final sticker =
+          stickerFromId(message.meta['sticker'] as String?) ??
           CoralSticker.wave;
       return Align(
         alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
@@ -96,8 +98,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
           child: GestureDetector(
             onLongPress: widget.onLongPress,
             child: Column(
-              crossAxisAlignment:
-                  mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: mine
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
@@ -115,19 +118,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                   child: StickerView(sticker: sticker, size: 132),
                 ),
                 const SizedBox(height: 2),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      formatClock(message.createdAt),
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: palette.textMuted.withValues(alpha: 0.8),
-                      ),
-                    ),
-                    if (mine) ...[const SizedBox(width: 6), _StatusDrop(status: message.status)],
-                  ],
-                ),
+                _buildFooter(message, mine, palette.textMuted),
+                if (message.status == MessageStatus.failed && mine)
+                  _buildRetry(palette),
               ],
             ),
           ),
@@ -144,7 +137,10 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
             ? LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [palette.outgoingBubble, Color.lerp(palette.outgoingBubble, palette.accentSoft, 0.22)!],
+                colors: [
+                  palette.outgoingBubble,
+                  Color.lerp(palette.outgoingBubble, palette.accentSoft, 0.22)!,
+                ],
               )
             : null,
         borderRadius: BorderRadius.only(
@@ -154,11 +150,16 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
           bottomRight: Radius.circular(mine ? 5 : 18),
         ),
         border: widget.highlight
-            ? Border.all(color: palette.halo.withValues(alpha: 0.75), width: 1.4)
+            ? Border.all(
+                color: palette.halo.withValues(alpha: 0.75),
+                width: 1.4,
+              )
             : null,
         boxShadow: [
           BoxShadow(
-            color: (mine ? palette.accent : Colors.black).withValues(alpha: 0.10),
+            color: (mine ? palette.accent : Colors.black).withValues(
+              alpha: 0.10,
+            ),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -172,7 +173,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
             Text(
               widget.strings.get('messageDeleted'),
               style: TextStyle(
-                color: mine ? palette.outgoingText.withValues(alpha: 0.7) : palette.incomingText.withValues(alpha: 0.65),
+                color: mine
+                    ? palette.outgoingText.withValues(alpha: 0.7)
+                    : palette.incomingText.withValues(alpha: 0.65),
                 fontStyle: FontStyle.italic,
                 fontSize: 14,
               ),
@@ -187,13 +190,17 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                   width: maxWidth - 30,
                   errorBuilder: (_, __, ___) => Padding(
                     padding: const EdgeInsets.all(20),
-                    child: Icon(Icons.broken_image_outlined, color: palette.incomingText),
+                    child: Icon(
+                      Icons.broken_image_outlined,
+                      color: palette.incomingText,
+                    ),
                   ),
                 ),
               ),
             if (message.isImage) const SizedBox(height: 6),
             if (message.isAudio) _AudioBubble(message: message, mine: mine),
-            if (message.isAudio && message.text.isNotEmpty) const SizedBox(height: 6),
+            if (message.isAudio && message.text.isNotEmpty)
+              const SizedBox(height: 6),
             if (message.isVideoNote)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
@@ -203,7 +210,8 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                   mine: mine,
                 ),
               ),
-            if (message.isVideoNote && message.text.isNotEmpty) const SizedBox(height: 6),
+            if (message.isVideoNote && message.text.isNotEmpty)
+              const SizedBox(height: 6),
             if (message.isFile || message.isVideo)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -221,8 +229,11 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                               .withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Icon(_fileIcon(message.meta['mime'] as String?),
-                            color: mine ? palette.outgoingText : palette.accent, size: 22),
+                        child: Icon(
+                          _fileIcon(message.meta['mime'] as String?),
+                          color: mine ? palette.outgoingText : palette.accent,
+                          size: 22,
+                        ),
                       ),
                       const SizedBox(width: 10),
                       Flexible(
@@ -236,7 +247,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: mine ? palette.outgoingText : palette.incomingText,
+                                color: mine
+                                    ? palette.outgoingText
+                                    : palette.incomingText,
                                 fontSize: 14,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -246,7 +259,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                               _formatSize(message.meta['size']),
                               style: TextStyle(
                                 color: mine
-                                    ? palette.outgoingText.withValues(alpha: 0.75)
+                                    ? palette.outgoingText.withValues(
+                                        alpha: 0.75,
+                                      )
                                     : palette.textMuted,
                                 fontSize: 11.5,
                               ),
@@ -255,14 +270,17 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Icon(Icons.download_rounded,
-                          size: 18,
-                          color: mine ? palette.outgoingText : palette.accent),
+                      Icon(
+                        Icons.download_rounded,
+                        size: 18,
+                        color: mine ? palette.outgoingText : palette.accent,
+                      ),
                     ],
                   ),
                 ),
               ),
-            if ((message.isFile || message.isVideo) && message.text.isNotEmpty) const SizedBox(height: 6),
+            if ((message.isFile || message.isVideo) && message.text.isNotEmpty)
+              const SizedBox(height: 6),
             if (message.text.isNotEmpty)
               Text(
                 message.text,
@@ -274,22 +292,11 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
               ),
           ],
           const SizedBox(height: 4),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_showTime)
-                Padding(
-                  padding: const EdgeInsets.only(right: 7),
-                  child: Text(
-                    formatClock(message.createdAt),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: (mine ? palette.outgoingText : palette.incomingText).withValues(alpha: 0.6),
-                    ),
-                  ),
-                ),
-              if (mine && !deleted) _StatusDrop(status: message.status),
-            ],
+          _buildFooter(
+            message,
+            mine,
+            mine ? palette.outgoingText : palette.incomingText,
+            deleted: deleted,
           ),
           if (message.reactions.isNotEmpty)
             Padding(
@@ -300,13 +307,22 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                 children: [
                   for (final entry in message.reactions.entries)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
-                        color: (mine ? palette.outgoingText : palette.incomingText).withValues(alpha: 0.12),
+                        color:
+                            (mine ? palette.outgoingText : palette.incomingText)
+                                .withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(999),
                         border: entry.value.contains(widget.myId)
                             ? Border.all(
-                                color: (mine ? palette.outgoingText : palette.incomingText).withValues(alpha: 0.5),
+                                color:
+                                    (mine
+                                            ? palette.outgoingText
+                                            : palette.incomingText)
+                                        .withValues(alpha: 0.5),
                               )
                             : null,
                       ),
@@ -314,7 +330,9 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
                         '${entry.key} ${entry.value.length}',
                         style: TextStyle(
                           fontSize: 12,
-                          color: mine ? palette.outgoingText : palette.incomingText,
+                          color: mine
+                              ? palette.outgoingText
+                              : palette.incomingText,
                         ),
                       ),
                     ),
@@ -322,23 +340,7 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
               ),
             ),
           if (message.status == MessageStatus.failed && mine)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: InkWell(
-                onTap: widget.onRetry,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.refresh_rounded, size: 14, color: palette.coral),
-                    const SizedBox(width: 4),
-                    Text(
-                      widget.strings.get('failedToSend'),
-                      style: TextStyle(fontSize: 11.5, color: palette.coral),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            _buildRetry(palette),
         ],
       ),
     );
@@ -363,6 +365,57 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
     );
   }
 
+  Widget _buildFooter(
+    Message message,
+    bool mine,
+    Color textColor, {
+    bool deleted = false,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _showTime = !_showTime),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_showTime)
+            Padding(
+              padding: const EdgeInsets.only(right: 7),
+              child: Text(
+                formatClock(message.createdAt),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: textColor.withValues(alpha: 0.65),
+                ),
+              ),
+            ),
+          if (mine && !deleted)
+            _StatusDrop(
+              status: message.status,
+              onTap: () => setState(() => _showTime = !_showTime),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetry(CoralinkPalette palette) => Padding(
+    padding: const EdgeInsets.only(top: 4),
+    child: InkWell(
+      onTap: widget.onRetry,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.refresh_rounded, size: 14, color: palette.coral),
+          const SizedBox(width: 4),
+          Text(
+            widget.strings.get('failedToSend'),
+            style: TextStyle(fontSize: 11.5, color: palette.coral),
+          ),
+        ],
+      ),
+    ),
+  );
+
   Uint8List _bytes(String value) {
     try {
       return base64Decode(value);
@@ -377,11 +430,15 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
     if (mime.startsWith('video/')) return Icons.movie_rounded;
     if (mime.startsWith('audio/')) return Icons.audiotrack_rounded;
     if (mime.contains('pdf')) return Icons.picture_as_pdf_rounded;
-    if (mime.contains('zip') || mime.contains('compressed') || mime.contains('rar')) {
+    if (mime.contains('zip') ||
+        mime.contains('compressed') ||
+        mime.contains('rar')) {
       return Icons.folder_zip_rounded;
     }
-    if (mime.contains('sheet') || mime.contains('excel')) return Icons.table_chart_rounded;
-    if (mime.contains('document') || mime.contains('word')) return Icons.description_rounded;
+    if (mime.contains('sheet') || mime.contains('excel'))
+      return Icons.table_chart_rounded;
+    if (mime.contains('document') || mime.contains('word'))
+      return Icons.description_rounded;
     if (mime.contains('text')) return Icons.article_rounded;
     return Icons.insert_drive_file_rounded;
   }
@@ -397,68 +454,74 @@ class _MessageBubbleState extends State<MessageBubble> with SingleTickerProvider
   }
 }
 
-/// Delivery drop. It follows the app's water metaphor but is now a bright,
-/// readable status rather than a faint speck: white while in flight, mint when
-/// delivered, and a glowing mint drop with a check once read.
+/// Delivery drop: blue until read, green after the recipient opens the message.
 class _StatusDrop extends StatelessWidget {
-  const _StatusDrop({required this.status});
+  const _StatusDrop({required this.status, this.onTap});
   final MessageStatus status;
+  final VoidCallback? onTap;
+
+  static const _unread = Color(0xFF63B3FF);
+  static const _read = Color(0xFF73E2B4);
+  static const _failed = Color(0xFFFF6B6B);
 
   String _label(AppStrings strings) => switch (status) {
-        MessageStatus.sending => strings.get('statusSending'),
-        MessageStatus.sent => strings.get('statusSent'),
-        MessageStatus.delivered => strings.get('statusDelivered'),
-        MessageStatus.read => strings.get('statusRead'),
-        MessageStatus.failed => strings.get('failedToSend'),
-      };
+    MessageStatus.sending => strings.get('statusSending'),
+    MessageStatus.sent => strings.get('statusSent'),
+    MessageStatus.delivered => strings.get('statusDelivered'),
+    MessageStatus.read => strings.get('statusRead'),
+    MessageStatus.failed => strings.get('failedToSend'),
+  };
 
   @override
   Widget build(BuildContext context) {
-    final palette = context.palette;
-    final white = palette.outgoingText;
     final (color, size, opacity) = switch (status) {
-      MessageStatus.sending => (white, 11.0, 0.55),
-      MessageStatus.sent => (white, 12.5, 0.85),
-      MessageStatus.delivered => (palette.halo, 14.0, 1.0),
-      MessageStatus.read => (palette.halo, 14.5, 1.0),
-      MessageStatus.failed => (palette.coral, 14.0, 1.0),
+      MessageStatus.sending => (_unread, 11.0, 0.55),
+      MessageStatus.sent => (_unread, 12.5, 0.85),
+      MessageStatus.delivered => (_unread, 14.0, 1.0),
+      MessageStatus.read => (_read, 14.5, 1.0),
+      MessageStatus.failed => (_failed, 14.0, 1.0),
     };
     final read = status == MessageStatus.read;
     final delivered = status == MessageStatus.delivered;
     return Semantics(
       label: _label(AppStrings(Localizations.localeOf(context))),
-      child: Container(
-        padding: const EdgeInsets.all(1.5),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          boxShadow: (read || delivered)
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.55),
-                    blurRadius: read ? 9 : 5,
-                    spreadRadius: read ? 1.5 : 0.5,
-                  ),
-                ]
-              : null,
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Icon(
-              Icons.water_drop_rounded,
-              size: size,
-              color: color.withValues(alpha: opacity),
-            ),
-            if (read)
-              Positioned(
-                bottom: 1.5,
-                child: Icon(
-                  Icons.check_rounded,
-                  size: 7.5,
-                  color: palette.outgoingBubble,
-                ),
+      button: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: (read || delivered)
+                ? [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.55),
+                      blurRadius: read ? 9 : 5,
+                      spreadRadius: read ? 1.5 : 0.5,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                Icons.water_drop_rounded,
+                size: size,
+                color: color.withValues(alpha: opacity),
               ),
-          ],
+              if (read)
+                Positioned(
+                  bottom: 1.5,
+                  child: Icon(
+                    Icons.check_rounded,
+                    size: 7.5,
+                    color: const Color(0xFF0D2E1F),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -481,7 +544,11 @@ class DateDivider extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(
               label,
-              style: TextStyle(color: palette.textMuted, fontSize: 11.5, letterSpacing: 0.3),
+              style: TextStyle(
+                color: palette.textMuted,
+                fontSize: 11.5,
+                letterSpacing: 0.3,
+              ),
             ),
           ),
           Expanded(child: Divider(color: palette.divider)),
@@ -517,7 +584,9 @@ class ChatTile extends StatelessWidget {
     final unread = chat.unreadCount > 0;
     final online = chat.peerPresence != Presence.offline;
     final statusLabel = chat.isGroup
-        ? strings.get('membersCount').replaceAll('{count}', '${chat.memberCount}')
+        ? strings
+              .get('membersCount')
+              .replaceAll('{count}', '${chat.memberCount}')
         : switch (chat.peerPresence) {
             Presence.online => strings.get('online'),
             Presence.active => strings.get('active'),
@@ -567,7 +636,11 @@ class ChatTile extends StatelessWidget {
                       if (chat.pinned)
                         Padding(
                           padding: const EdgeInsets.only(right: 5),
-                          child: Icon(Icons.push_pin_rounded, size: 13, color: palette.accent),
+                          child: Icon(
+                            Icons.push_pin_rounded,
+                            size: 13,
+                            color: palette.accent,
+                          ),
                         ),
                       Expanded(
                         child: Text(
@@ -576,7 +649,9 @@ class ChatTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: palette.textPrimary,
-                            fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+                            fontWeight: unread
+                                ? FontWeight.w600
+                                : FontWeight.w500,
                             fontSize: 15.5,
                           ),
                         ),
@@ -584,7 +659,11 @@ class ChatTile extends StatelessWidget {
                       if (chat.muted)
                         Padding(
                           padding: const EdgeInsets.only(left: 4),
-                          child: Icon(Icons.volume_off_rounded, size: 14, color: palette.textMuted),
+                          child: Icon(
+                            Icons.volume_off_rounded,
+                            size: 14,
+                            color: palette.textMuted,
+                          ),
                         ),
                       const SizedBox(width: 6),
                       Text(
@@ -592,7 +671,9 @@ class ChatTile extends StatelessWidget {
                             ? ''
                             : formatChatStamp(chat.lastMessageAt!, strings),
                         style: TextStyle(
-                          color: unread ? palette.accentSoft : palette.textMuted,
+                          color: unread
+                              ? palette.accentSoft
+                              : palette.textMuted,
                           fontSize: 11,
                         ),
                       ),
@@ -603,11 +684,15 @@ class ChatTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          chat.lastMessageText.isEmpty ? statusLabel : chat.lastMessageText,
+                          chat.lastMessageText.isEmpty
+                              ? statusLabel
+                              : chat.lastMessageText,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: unread ? palette.textPrimary.withValues(alpha: 0.9) : palette.textMuted,
+                            color: unread
+                                ? palette.textPrimary.withValues(alpha: 0.9)
+                                : palette.textMuted,
                             fontSize: 13.4,
                           ),
                         ),
@@ -681,13 +766,13 @@ class CallHistoryChip extends StatelessWidget {
     final label = missed
         ? strings.get('callMissed')
         : record.outgoing
-            ? strings.get('callOutgoing')
-            : strings.get('callIncoming');
+        ? strings.get('callOutgoing')
+        : strings.get('callIncoming');
     final detail = record.answered
         ? _duration(record.durationSeconds)
         : missed
-            ? ''
-            : strings.get('callNoAnswer');
+        ? ''
+        : strings.get('callNoAnswer');
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 5),
       child: Center(
@@ -712,7 +797,11 @@ class CallHistoryChip extends StatelessWidget {
                 const SizedBox(width: 7),
                 Text(
                   label,
-                  style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
                 if (detail.isNotEmpty) ...[
                   const SizedBox(width: 6),
@@ -799,7 +888,9 @@ class _AudioBubbleState extends State<_AudioBubble> {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final total = _dur.inMilliseconds;
-    final progress = total == 0 ? 0.0 : (_pos.inMilliseconds / total).clamp(0.0, 1.0);
+    final progress = total == 0
+        ? 0.0
+        : (_pos.inMilliseconds / total).clamp(0.0, 1.0);
     final shown = (_playing || _pos > Duration.zero) ? _pos : _dur;
     return SizedBox(
       width: 220,
@@ -896,7 +987,10 @@ class _VideoNoteBubbleState extends State<_VideoNoteBubble>
       return;
     }
     try {
-      final controller = await controllerFromBase64(widget.base64Data, widget.mime);
+      final controller = await controllerFromBase64(
+        widget.base64Data,
+        widget.mime,
+      );
       await controller.initialize();
       if (!mounted) {
         await controller.dispose();
@@ -942,11 +1036,11 @@ class _VideoNoteBubbleState extends State<_VideoNoteBubble>
     final controller = _controller;
     final playing = controller?.value.isPlaying ?? false;
 
-    final progress = (controller != null &&
-            controller.value.duration > Duration.zero)
+    final progress =
+        (controller != null && controller.value.duration > Duration.zero)
         ? (controller.value.position.inMilliseconds /
-                controller.value.duration.inMilliseconds)
-            .clamp(0.0, 1.0)
+                  controller.value.duration.inMilliseconds)
+              .clamp(0.0, 1.0)
         : 0.0;
 
     final accent = widget.mine ? palette.accent : palette.accentSoft;
@@ -1035,7 +1129,11 @@ class _VideoNoteBubbleState extends State<_VideoNoteBubble>
       );
     }
     if (_failed || _controller == null) {
-      return Icon(Icons.videocam_off_rounded, color: palette.textMuted, size: 34);
+      return Icon(
+        Icons.videocam_off_rounded,
+        color: palette.textMuted,
+        size: 34,
+      );
     }
     final value = _controller!.value;
     if (!value.isInitialized) return const SizedBox.shrink();

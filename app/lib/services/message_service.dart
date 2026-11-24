@@ -47,6 +47,18 @@ class PetEvent {
   final PetState state;
 }
 
+class PetKeyEvent {
+  const PetKeyEvent({
+    required this.peerId,
+    required this.petId,
+    required this.key,
+  });
+
+  final String peerId;
+  final String petId;
+  final String key;
+}
+
 class MessageService {
   MessageService({
     required this.store,
@@ -68,10 +80,13 @@ class MessageService {
     _statusSubscription = realtime.statuses.listen((status) {
       if (status == RealtimeStatus.connected) {
         realtime.setPresence('active');
-        flushOutbox();
+        unawaited(_handleReconnect());
       }
     });
-    _outboxTimer = Timer.periodic(const Duration(seconds: 8), (_) => flushOutbox());
+    _outboxTimer = Timer.periodic(
+      const Duration(seconds: 8),
+      (_) => flushOutbox(),
+    );
   }
 
   final LocalStore store;
@@ -86,17 +101,25 @@ class MessageService {
   final _incoming = StreamController<IncomingEvent>.broadcast();
   final _presence = StreamController<PresenceEvent>.broadcast();
   final _typing = StreamController<TypingEvent>.broadcast();
-  final _directChanges = StreamController<({String peerId, bool direct})>.broadcast();
+  final _directChanges =
+      StreamController<({String peerId, bool direct})>.broadcast();
   final _removed = StreamController<String>.broadcast();
   final _groups = StreamController<GroupAddedEvent>.broadcast();
   final _pets = StreamController<PetEvent>.broadcast();
+  final _petKeys = StreamController<PetKeyEvent>.broadcast();
   final directPeers = <String>{};
 
   late final StreamSubscription<RealtimeEvent> _eventSubscription;
   late final StreamSubscription<RealtimeStatus> _statusSubscription;
   Timer? _outboxTimer;
+  final _pendingAcks = <Future<void>>{};
   String? activeChatId;
-  final Set<String> _inFlight = {};
+  final Map<String, Future<void>> _incomingTasks = {};
+  final Map<String, Future<bool>> _groupTasks = {};
+  bool appResumed = true;
+  bool _syncingQueue = false;
+  bool _flushingOutbox = false;
+  bool _flushingReads = false;
   final int _maxRawImageBytes = 340 * 1024;
   // Stays under the relay's decoded-ciphertext ceiling (9 MB) once the base64
   // envelope (~4/3 of raw) is accounted for, so an accepted send never fails
@@ -107,7 +130,8 @@ class MessageService {
   Stream<IncomingEvent> get incoming => _incoming.stream;
   Stream<PresenceEvent> get presenceEvents => _presence.stream;
   Stream<TypingEvent> get typingEvents => _typing.stream;
-  Stream<({String peerId, bool direct})> get directChanges => _directChanges.stream;
+  Stream<({String peerId, bool direct})> get directChanges =>
+      _directChanges.stream;
   Stream<String> get removedMessages => _removed.stream;
 
   /// Fires when a group key arrives for a group this device did not know yet —
@@ -116,10 +140,53 @@ class MessageService {
 
   /// Shared Tamagotchi events (care, adoption, rename and sync snapshots).
   Stream<PetEvent> get petEvents => _pets.stream;
+  Stream<PetKeyEvent> get petKeyEvents => _petKeys.stream;
+
+  bool _started = false;
+  final _pendingIncoming = <IncomingEvent>[];
+  final _pendingGroups = <GroupAddedEvent>[];
+
+  void start() {
+    if (_started) return;
+    _started = true;
+    for (final event in _pendingIncoming) {
+      _incoming.add(event);
+    }
+    for (final event in _pendingGroups) {
+      _groups.add(event);
+    }
+    _pendingIncoming.clear();
+    _pendingGroups.clear();
+  }
+
+  void _emitIncoming(IncomingEvent event) {
+    if (_started) {
+      _incoming.add(event);
+    } else {
+      _pendingIncoming.add(event);
+    }
+  }
+
+  void _emitGroup(GroupAddedEvent event) {
+    if (_started) {
+      _groups.add(event);
+    } else {
+      _pendingGroups.add(event);
+    }
+  }
 
   bool isDirect(String peerId) => directPeers.contains(peerId);
 
+  Future<void> _handleReconnect() async {
+    await syncQueue();
+    await flushOutbox();
+    await flushReadReceipts();
+    await syncMessageStatuses();
+  }
+
   Future<void> syncQueue() async {
+    if (_syncingQueue) return;
+    _syncingQueue = true;
     try {
       final queued = await api.queuedMessages();
       for (final dto in queued) {
@@ -151,6 +218,78 @@ class MessageService {
       await flushOutbox();
     } catch (error) {
       Log.e('message.sync', error);
+    } finally {
+      _syncingQueue = false;
+    }
+  }
+
+  Future<void> _recordRead(String chatId, String id) async {
+    await store.enqueueReadReceipt(id, chatId);
+    final chat = await store.getChat(chatId);
+    if (chat?.isGroup == true) {
+      realtime.markGroupRead(chatId, [id]);
+    } else {
+      realtime.markRead(chatId, [id]);
+    }
+    await flushReadReceipts();
+  }
+
+  Future<void> flushReadReceipts() async {
+    if (_flushingReads) return;
+    _flushingReads = true;
+    try {
+      final pending = await store.getPendingReadReceipts();
+      final byChat = <String, List<String>>{};
+      for (final receipt in pending) {
+        byChat.putIfAbsent(receipt.chatId, () => []).add(receipt.messageId);
+      }
+      for (final entry in byChat.entries) {
+        final ids = entry.value;
+        try {
+          final chat = await store.getChat(entry.key);
+          if (chat?.isGroup == true) {
+            await api.markGroupMessagesRead(entry.key, ids);
+          } else {
+            await api.markMessagesRead(entry.key, ids);
+          }
+          await store.removeReadReceipts(ids);
+        } catch (error) {
+          Log.e('message.read.sync', error);
+        }
+      }
+    } finally {
+      _flushingReads = false;
+    }
+  }
+
+  Future<void> syncMessageStatuses() async {
+    try {
+      final outgoing = (await store.getAllMessages())
+          .where(
+            (message) =>
+                message.senderId == myId &&
+                message.status != MessageStatus.failed &&
+                message.status != MessageStatus.read,
+          )
+          .map((message) => message.id)
+          .toList();
+      for (var start = 0; start < outgoing.length; start += 400) {
+        final end = (start + 400).clamp(0, outgoing.length);
+        final statuses = await api.messageStatuses(
+          outgoing.sublist(start, end),
+        );
+        for (final entry in statuses.entries) {
+          final status = messageStatusFromWire(entry.value);
+          final message = await store.getMessage(entry.key);
+          if (message != null && status.index > message.status.index) {
+            await store.updateMessageStatus(entry.key, status);
+            final updated = await store.getMessage(entry.key);
+            if (updated != null) _messageUpdates.add(updated);
+          }
+        }
+      }
+    } catch (error) {
+      Log.e('message.status.sync', error);
     }
   }
 
@@ -164,8 +303,31 @@ class MessageService {
     required String payload,
     required String kind,
     required DateTime createdAt,
+  }) {
+    final existing = _groupTasks[id];
+    if (existing != null) return existing;
+    final task = _processGroupIncomingImpl(
+      id: id,
+      groupId: groupId,
+      senderId: senderId,
+      payload: payload,
+      kind: kind,
+      createdAt: createdAt,
+    );
+    _groupTasks[id] = task;
+    return task.whenComplete(() => _groupTasks.remove(id));
+  }
+
+  Future<bool> _processGroupIncomingImpl({
+    required String id,
+    required String groupId,
+    required String senderId,
+    required String payload,
+    required String kind,
+    required DateTime createdAt,
   }) async {
-    if (await store.getMessage(id) != null) return true;
+    final existing = await store.getMessage(id);
+    if (existing != null) return existing.meta['undecryptable'] != true;
     Map<String, dynamic>? envelope;
     String? error;
     try {
@@ -183,15 +345,46 @@ class MessageService {
             : 'Не удалось расшифровать сообщение',
         status: MessageStatus.delivered,
         createdAt: createdAt,
-        meta: const {'undecryptable': true},
+        meta: {
+          'undecryptable': true,
+          'code': error,
+          'enc': payload,
+          'retryable': true,
+        },
       );
       await store.upsertMessage(broken);
-      await store.touchChat(groupId,
-          preview: broken.text, at: createdAt, incrementUnread: activeChatId != groupId);
+      await store.touchChat(
+        groupId,
+        preview: broken.text,
+        at: createdAt,
+        incrementUnread: !(appResumed && activeChatId == groupId),
+      );
       _messageUpdates.add(broken);
-      _incoming.add(IncomingEvent(broken, isActiveChat: activeChatId == groupId));
+      _emitIncoming(
+        IncomingEvent(
+          broken,
+          isActiveChat: appResumed && activeChatId == groupId,
+        ),
+      );
       return false;
     }
+    await _applyGroupEnvelope(
+      envelope: envelope,
+      id: id,
+      groupId: groupId,
+      senderId: senderId,
+      createdAt: createdAt,
+    );
+    return true;
+  }
+
+  Future<void> _applyGroupEnvelope({
+    required Map<String, dynamic> envelope,
+    required String id,
+    required String groupId,
+    required String senderId,
+    required DateTime createdAt,
+  }) async {
     final type = envelope['type'] as String? ?? 'text';
     if (type == 'groupMeta') {
       final existing = await store.getChat(groupId);
@@ -199,13 +392,17 @@ class MessageService {
         final title = envelope['title'] as String?;
         final avatar = envelope['avatar'] as String?;
         final memberCount = envelope['memberCount'];
-        await store.upsertChat(existing.copyWith(
-          peerName: title ?? existing.peerName,
-          peerAvatar: avatar ?? existing.peerAvatar,
-          memberCount: memberCount is int ? memberCount : existing.memberCount,
-        ));
+        await store.upsertChat(
+          existing.copyWith(
+            peerName: title ?? existing.peerName,
+            peerAvatar: avatar ?? existing.peerAvatar,
+            memberCount: memberCount is int
+                ? memberCount
+                : existing.memberCount,
+          ),
+        );
       }
-      return true;
+      return;
     }
     if (type == 'pet') {
       final action = envelope['action'] as String? ?? 'care';
@@ -214,41 +411,44 @@ class MessageService {
           ? PetState.fromJson(rawState.cast<String, dynamic>())
           : null;
       if (petState != null) {
-        _pets.add(PetEvent(
-          chatId: groupId,
-          senderId: senderId,
-          action: action,
-          state: petState,
-        ));
+        _pets.add(
+          PetEvent(
+            chatId: groupId,
+            senderId: senderId,
+            action: action,
+            state: petState,
+          ),
+        );
       }
-      // Sync ping/snapshot frames are not conversation content: they only keep
-      // the shared pet in step and must not appear as a message.
-      if (action == 'ping' || action == 'snapshot') return true;
+      if (action == 'ping' || action == 'snapshot') return;
     }
     final image = envelope['image'] as String?;
     final fileData = envelope['data'] as String?;
-    var meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    var meta =
+        (envelope['meta'] as Map?)?.cast<String, dynamic>() ??
+        <String, dynamic>{};
     if (type == 'pet' && envelope['state'] is Map) {
       meta = {...meta, 'petState': envelope['state']};
     }
     final text = (envelope['text'] as String?) ?? '';
-    final isActive = activeChatId == groupId;
+    final isActive = appResumed && activeChatId == groupId;
     final MessageKind messageKind = type == 'image'
         ? MessageKind.image
         : type == 'file'
-            ? MessageKind.file
-            : type == 'audio'
-                ? MessageKind.audio
-                : type == 'video'
-                    ? MessageKind.video
-                    : type == 'video_note'
-                        ? MessageKind.videoNote
-                        : type == 'sticker'
-                            ? MessageKind.sticker
-                            : type == 'pet'
-                                ? MessageKind.pet
-                                : MessageKind.text;
-    final hasData = type == 'file' ||
+        ? MessageKind.file
+        : type == 'audio'
+        ? MessageKind.audio
+        : type == 'video'
+        ? MessageKind.video
+        : type == 'video_note'
+        ? MessageKind.videoNote
+        : type == 'sticker'
+        ? MessageKind.sticker
+        : type == 'pet'
+        ? MessageKind.pet
+        : MessageKind.text;
+    final hasData =
+        type == 'file' ||
         type == 'audio' ||
         type == 'video' ||
         type == 'video_note';
@@ -267,26 +467,30 @@ class MessageService {
     final preview = messageKind == MessageKind.image
         ? 'Фото'
         : messageKind == MessageKind.file
-            ? 'Файл'
-            : messageKind == MessageKind.audio
-                ? 'Голосовое'
-                : messageKind == MessageKind.video
-                    ? 'Видео'
-                    : messageKind == MessageKind.videoNote
-                        ? 'Видеокружок'
-                : messageKind == MessageKind.sticker
-                    ? 'Стикер'
-                    : messageKind == MessageKind.pet
-                        ? 'Тамагочи'
-                        : text;
-    await store.touchChat(groupId, preview: preview, at: createdAt, incrementUnread: !isActive);
+        ? 'Файл'
+        : messageKind == MessageKind.audio
+        ? 'Голосовое'
+        : messageKind == MessageKind.video
+        ? 'Видео'
+        : messageKind == MessageKind.videoNote
+        ? 'Видеокружок'
+        : messageKind == MessageKind.sticker
+        ? 'Стикер'
+        : messageKind == MessageKind.pet
+        ? 'Тамагочи'
+        : text;
+    await store.touchChat(
+      groupId,
+      preview: preview,
+      at: createdAt,
+      incrementUnread: !isActive,
+    );
     if (isActive) {
       await store.markChatRead(groupId);
-      realtime.markGroupRead(groupId, [id]);
+      await _recordRead(groupId, id);
     }
     _messageUpdates.add(message);
-    _incoming.add(IncomingEvent(message, isActiveChat: isActive));
-    return true;
+    _emitIncoming(IncomingEvent(message, isActiveChat: isActive));
   }
 
   /// Create a group on the server, store it locally, and distribute the group
@@ -296,7 +500,11 @@ class MessageService {
     List<String> memberIds = const [],
     String avatar = '',
   }) async {
-    final group = await api.createGroup(title: title, memberIds: memberIds, avatar: avatar);
+    final group = await api.createGroup(
+      title: title,
+      memberIds: memberIds,
+      avatar: avatar,
+    );
     await _registerGroupChat(group);
     await _distributeKey(group.id, group.members.map((m) => m.id).toList());
     return group;
@@ -335,11 +543,13 @@ class MessageService {
     final group = await api.updateGroup(groupId, title: title, avatar: avatar);
     final existing = await store.getChat(groupId);
     if (existing != null) {
-      await store.upsertChat(existing.copyWith(
-        peerName: group.title,
-        peerAvatar: group.avatar,
-        memberCount: group.memberCount,
-      ));
+      await store.upsertChat(
+        existing.copyWith(
+          peerName: group.title,
+          peerAvatar: group.avatar,
+          memberCount: group.memberCount,
+        ),
+      );
     }
     // Mirror the change to every other member in real time: a symmetric group
     // control envelope carries the new title/avatar so their chat row updates
@@ -390,22 +600,31 @@ class MessageService {
   }
 
   Future<void> flushOutbox() async {
-    if (!realtime.isConnected) return;
-    final pending = await store.getOutbox();
-    for (final item in pending) {
-      final isGroup = item.payload['group'] == true;
-      _dispatchSend(
-        isGroup,
-        item.payload['id'] as String,
-        item.payload['to'] as String,
-        item.payload['ciphertext'] as String,
-        item.payload['kind'] as String,
-        (item.payload['meta'] as Map?)?.cast<String, dynamic>() ?? const {},
-        DateTime.fromMillisecondsSinceEpoch(
-          (item.payload['createdAt'] as num).toInt(),
-        ),
-      );
-      await store.removeOutbox(item.id);
+    if (!realtime.isConnected || _flushingOutbox) return;
+    _flushingOutbox = true;
+    try {
+      final pending = await store.getOutbox();
+      for (final item in pending) {
+        final isGroup = item.payload['group'] == true;
+        final delivered = await _dispatchSend(
+          isGroup,
+          item.payload['id'] as String,
+          item.payload['to'] as String,
+          item.payload['ciphertext'] as String,
+          item.payload['kind'] as String,
+          (item.payload['meta'] as Map?)?.cast<String, dynamic>() ?? const {},
+          DateTime.fromMillisecondsSinceEpoch(
+            (item.payload['createdAt'] as num).toInt(),
+          ),
+        );
+        if (delivered) {
+          await store.removeOutbox(item.id);
+        } else {
+          await store.bumpOutboxAttempts(item.id);
+        }
+      }
+    } finally {
+      _flushingOutbox = false;
     }
   }
 
@@ -466,15 +685,17 @@ class MessageService {
       await store.upsertUser(user);
       final chat = await store.getChat(peerId);
       if (chat == null) return;
-      await store.upsertChat(chat.copyWith(
-        peerName: user.name,
-        peerPhone: user.phone,
-        peerAbout: user.about,
-        peerAvatarColor: user.avatarColor,
-        peerAvatar: user.avatar,
-        peerPresence: user.presence,
-        peerLastSeen: user.lastSeen,
-      ));
+      await store.upsertChat(
+        chat.copyWith(
+          peerName: user.name,
+          peerPhone: user.phone,
+          peerAbout: user.about,
+          peerAvatarColor: user.avatarColor,
+          peerAvatar: user.avatar,
+          peerPresence: user.presence,
+          peerLastSeen: user.lastSeen,
+        ),
+      );
       if (await store.hasContact(peerId)) {
         await store.upsertContact(user);
       }
@@ -494,7 +715,12 @@ class MessageService {
       chatId: chatId,
       kind: MessageKind.text,
       preview: clean,
-      envelope: {'v': 1, 'type': 'text', 'text': clean, 'sentAt': DateTime.now().millisecondsSinceEpoch},
+      envelope: {
+        'v': 1,
+        'type': 'text',
+        'text': clean,
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
     );
   }
 
@@ -611,7 +837,12 @@ class MessageService {
         'v': 1,
         'type': 'video',
         'data': base64Data,
-        'meta': {'mime': mime, 'name': name, 'size': size, 'durationMs': durationMs},
+        'meta': {
+          'mime': mime,
+          'name': name,
+          'size': size,
+          'durationMs': durationMs,
+        },
         'text': '',
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       },
@@ -702,14 +933,10 @@ class MessageService {
           ? await groupCrypto.encrypt(chatId, envelope)
           : await signal.encrypt(chatId, envelope);
       final id = const Uuid().v4();
-      _dispatchSend(
-        isGroup,
-        id,
-        chatId,
-        ciphertext,
-        'control',
-        const {'pet': 'sync'},
-        DateTime.now(),
+      unawaited(
+        _dispatchSend(isGroup, id, chatId, ciphertext, 'control', const {
+          'pet': 'sync',
+        }, DateTime.now()),
       );
     } catch (error) {
       Log.d('pet.sync', '$action: $error');
@@ -743,7 +970,51 @@ class MessageService {
     );
   }
 
-  Future<void> sendReaction(String chatId, String messageId, String emoji) async {
+  Future<void> recordPetEvent({
+    required String operationId,
+    required String chatId,
+    required String actorId,
+    required String action,
+    required PetState state,
+    required DateTime at,
+  }) async {
+    if (await store.getMessage('pet:$operationId') != null) return;
+    final message = Message(
+      id: 'pet:$operationId',
+      chatId: chatId,
+      senderId: actorId,
+      text: '',
+      kind: MessageKind.pet,
+      status: MessageStatus.delivered,
+      createdAt: at,
+      meta: {'pet': action, 'petState': state.toJson()},
+    );
+    await store.upsertMessage(message);
+    await store.touchChat(chatId, preview: 'Тамагочи', at: at);
+    _messageUpdates.add(message);
+  }
+
+  Future<void> sendPetKey(String peerId, String petId, String key) async {
+    await _sendEnvelope(
+      chatId: peerId,
+      kind: MessageKind.text,
+      preview: null,
+      control: true,
+      envelope: {
+        'v': 1,
+        'type': 'petKey',
+        'petId': petId,
+        'key': key,
+        'sentAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
+  Future<void> sendReaction(
+    String chatId,
+    String messageId,
+    String emoji,
+  ) async {
     final target = await store.getMessage(messageId);
     if (target == null) return;
     final reactions = Map<String, List<String>>.from(target.reactions);
@@ -842,10 +1113,11 @@ class MessageService {
       // meta: relay meta is size-capped server-side, so a base64 payload there
       // would reject the send and strand the recipient. The recipient rebuilds
       // meta['data'] from the decrypted envelope.
-      final wireMeta = (meta.containsKey('data') || meta.containsKey('petState'))
+      final wireMeta =
+          (meta.containsKey('data') || meta.containsKey('petState'))
           ? (<String, dynamic>{...meta}
-            ..remove('data')
-            ..remove('petState'))
+              ..remove('data')
+              ..remove('petState'))
           : meta;
       final wireKind = control ? 'control' : messageKindToWire(kind);
       final payload = {
@@ -857,18 +1129,15 @@ class MessageService {
         'meta': wireMeta,
         'createdAt': createdAt.millisecondsSinceEpoch,
       };
-      if (realtime.isConnected) {
-        _dispatchSend(isGroup, id, chatId, ciphertext, wireKind, wireMeta, createdAt);
-        message = message.copyWith(status: MessageStatus.sent);
-        await store.updateMessageStatus(id, MessageStatus.sent);
-      } else {
-        await store.enqueueOutbox(OutboxItem(
+      await store.enqueueOutbox(
+        OutboxItem(
           id: id,
           chatId: chatId,
           payload: payload,
           createdAt: createdAt,
-        ));
-      }
+        ),
+      );
+      unawaited(flushOutbox());
       _messageUpdates.add(message);
       if (!isGroup) _tryDirect(chatId, id, ciphertext);
       return message;
@@ -891,7 +1160,7 @@ class MessageService {
     }
   }
 
-  void _dispatchSend(
+  Future<bool> _dispatchSend(
     bool isGroup,
     String id,
     String chatId,
@@ -900,25 +1169,18 @@ class MessageService {
     Map<String, dynamic> meta,
     DateTime createdAt,
   ) {
-    if (isGroup) {
-      realtime.sendGroupMessage(
-        id: id,
-        groupId: chatId,
-        ciphertext: ciphertext,
-        kind: wireKind,
-        meta: meta,
-        createdAt: createdAt,
-      );
-    } else {
-      realtime.sendMessage(
-        id: id,
-        to: chatId,
-        ciphertext: ciphertext,
-        kind: wireKind,
-        meta: meta,
-        createdAt: createdAt,
-      );
-    }
+    final payload = <String, dynamic>{
+      if (isGroup) 'type': 'group.send',
+      if (isGroup) 'groupId': chatId,
+      if (!isGroup) 'type': 'message',
+      if (!isGroup) 'to': chatId,
+      'id': id,
+      'ciphertext': ciphertext,
+      'kind': wireKind,
+      'meta': meta,
+      'createdAt': createdAt.millisecondsSinceEpoch,
+    };
+    return realtime.sendAndWaitForAck(payload, id);
   }
 
   Future<void> _tryDirect(String chatId, String id, String ciphertext) async {
@@ -926,14 +1188,22 @@ class MessageService {
     if (p2p.isDirect(chatId)) {
       final ok = await p2p.sendAndWaitAck(chatId, id, ciphertext);
       if (ok) {
-        await store.updateMessageStatus(id, MessageStatus.delivered, at: DateTime.now());
+        await store.updateMessageStatus(
+          id,
+          MessageStatus.delivered,
+          at: DateTime.now(),
+        );
         final message = await store.getMessage(id);
         if (message != null) _messageUpdates.add(message);
       }
     }
   }
 
-  Future<void> _handleP2PPayload(String peerId, String id, String payload) async {
+  Future<void> _handleP2PPayload(
+    String peerId,
+    String id,
+    String payload,
+  ) async {
     final existing = await store.getMessage(id);
     if (existing != null) return;
     await _processIncoming(
@@ -949,7 +1219,9 @@ class MessageService {
   Future<void> _onRealtimeEvent(RealtimeEvent event) async {
     switch (event.type) {
       case 'message':
-        final raw = (event.data['message'] as Map?)?.cast<String, dynamic>() ?? event.data;
+        final raw =
+            (event.data['message'] as Map?)?.cast<String, dynamic>() ??
+            event.data;
         final id = raw['id'] as String?;
         if (id == null) return;
         final existing = await store.getMessage(id);
@@ -965,15 +1237,16 @@ class MessageService {
             viaRelay: true,
           );
         } else {
-          realtime.ackMessages([id]);
+          await _ackRelay(id);
         }
       case 'group.message':
-        final raw = (event.data['message'] as Map?)?.cast<String, dynamic>() ?? event.data;
+        final raw =
+            (event.data['message'] as Map?)?.cast<String, dynamic>() ??
+            event.data;
         final id = raw['id'] as String?;
         final groupId = raw['groupId'] as String?;
         if (id == null || groupId == null) return;
-        if (await store.getMessage(id) != null) return;
-        await _processGroupIncoming(
+        final stored = await _processGroupIncoming(
           id: id,
           groupId: groupId,
           senderId: (raw['from'] ?? raw['senderId']) as String,
@@ -983,8 +1256,10 @@ class MessageService {
             ((raw['createdAt'] as num?) ?? 0).toInt(),
           ),
         );
+        if (stored) await _ackGroupRelay(id);
       case 'group.read':
-        final ids = (event.data['messageIds'] as List?)
+        final ids =
+            (event.data['messageIds'] as List?)
                 ?.map((e) => e as String)
                 .toList() ??
             const <String>[];
@@ -998,11 +1273,15 @@ class MessageService {
         final id = event.data['id'] as String?;
         if (id == null) return;
         final current = await store.getMessage(id);
-        if (current != null && current.status == MessageStatus.sending) {
-          await store.updateMessageStatus(id, MessageStatus.sent);
+        final acknowledged = event.data['status'] == 'delivered'
+            ? MessageStatus.delivered
+            : MessageStatus.sent;
+        if (current != null && acknowledged.index > current.status.index) {
+          await store.updateMessageStatus(id, acknowledged);
           final updated = await store.getMessage(id);
           if (updated != null) _messageUpdates.add(updated);
         }
+        await store.removeOutbox(id);
       case 'message.delivered':
         await store.markMessagesDelivered(event.ids);
         for (final id in event.ids) {
@@ -1021,21 +1300,44 @@ class MessageService {
         final presence = presenceFromWire(event.data['status'] as String?);
         final lastSeen = event.data['lastSeen'] == null
             ? null
-            : DateTime.fromMillisecondsSinceEpoch((event.data['lastSeen'] as num).toInt());
+            : DateTime.fromMillisecondsSinceEpoch(
+                (event.data['lastSeen'] as num).toInt(),
+              );
         await _applyPresence(userId, presence, lastSeen);
       case 'typing':
         final from = event.data['from'] as String?;
         if (from == null) return;
         _typing.add(TypingEvent(from, event.data['on'] == true));
       case 'error':
-        Log.d('ws.error', '${event.data['code']}: ${event.data['message']}');
+        final code = event.data['code'] as String?;
+        Log.d('ws.error', '$code: ${event.data['message']}');
+        if (code == 'recipient_not_found' ||
+            code == 'not_a_member' ||
+            code == 'duplicate_id') {
+          final id = event.stringId;
+          if (id != null) {
+            final current = await store.getMessage(id);
+            if (current != null && current.status != MessageStatus.read) {
+              await store.updateMessageStatus(id, MessageStatus.failed);
+              await store.removeOutbox(id);
+              final message = await store.getMessage(id);
+              if (message != null) _messageUpdates.add(message);
+            }
+          }
+        }
     }
   }
 
-  Future<void> _applyPresence(String userId, Presence presence, DateTime? lastSeen) async {
+  Future<void> _applyPresence(
+    String userId,
+    Presence presence,
+    DateTime? lastSeen,
+  ) async {
     final chat = await store.getChat(userId);
     if (chat != null) {
-      await store.upsertChat(chat.copyWith(peerPresence: presence, peerLastSeen: lastSeen));
+      await store.upsertChat(
+        chat.copyWith(peerPresence: presence, peerLastSeen: lastSeen),
+      );
     }
     final user = await store.getUser(userId);
     if (user != null) {
@@ -1050,6 +1352,32 @@ class MessageService {
     _presence.add(PresenceEvent(userId, presence, lastSeen));
   }
 
+  Future<void> _ackGroupRelay(String id) => _trackAck(_ackGroupRelayNow(id));
+
+  Future<void> _ackGroupRelayNow(String id) async {
+    try {
+      await api.ackGroupMessages([id]);
+    } catch (error) {
+      Log.e('message.group.ack', error);
+    }
+  }
+
+  Future<void> _ackRelay(String id) => _trackAck(_ackRelayNow(id));
+
+  Future<void> _ackRelayNow(String id) async {
+    try {
+      await api.ackMessages([id]);
+    } catch (error) {
+      Log.e('message.ack', error);
+    }
+  }
+
+  Future<void> _trackAck(Future<void> future) {
+    _pendingAcks.add(future);
+    future.whenComplete(() => _pendingAcks.remove(future));
+    return future;
+  }
+
   Future<void> _processIncoming({
     required String id,
     required String senderId,
@@ -1057,76 +1385,92 @@ class MessageService {
     required String kind,
     required DateTime createdAt,
     required bool viaRelay,
+  }) {
+    final existing = _incomingTasks[id];
+    if (existing != null) return existing;
+    final task = _processIncomingImpl(
+      id: id,
+      senderId: senderId,
+      payload: payload,
+      kind: kind,
+      createdAt: createdAt,
+      viaRelay: viaRelay,
+    );
+    _incomingTasks[id] = task;
+    return task.whenComplete(() => _incomingTasks.remove(id));
+  }
+
+  Future<void> _processIncomingImpl({
+    required String id,
+    required String senderId,
+    required String payload,
+    required String kind,
+    required DateTime createdAt,
+    required bool viaRelay,
   }) async {
-    // The same message can arrive over P2P and relay at once. Serialize by id so
-    // only one copy is decrypted; the other is treated as already handled.
-    if (_inFlight.contains(id)) {
-      if (viaRelay) realtime.ackMessages([id]);
+    final existing = await store.getMessage(id);
+    if (existing != null) {
+      if (existing.meta['undecryptable'] == true) return;
+      if (viaRelay) {
+        await _ackRelay(id);
+        if (appResumed && activeChatId == senderId) {
+          await _recordRead(senderId, id);
+        }
+      }
       return;
     }
-    _inFlight.add(id);
+    Map<String, dynamic>? envelope;
+    String? decryptError;
     try {
-      if (await store.getMessage(id) != null) {
-        if (viaRelay) {
-          realtime.ackMessages([id]);
-          if (activeChatId == senderId) realtime.markRead(senderId, [id]);
-        }
-        return;
-      }
-      Map<String, dynamic>? envelope;
-      String? decryptError;
-      try {
-        envelope = await signal.decrypt(senderId, payload);
-      } on EncryptionException catch (error) {
-        decryptError = error.code;
-        Log.d('message.decrypt', error.code);
-      }
-      if (envelope != null) {
-        await _applyDecrypted(
-          envelope: envelope,
-          id: id,
-          senderId: senderId,
-          createdAt: createdAt,
-          viaRelay: viaRelay,
-        );
-        await _retryPending(senderId);
-        return;
-      }
-      // The other transport already decrypted this exact message.
-      if (decryptError == 'duplicate') {
-        if (viaRelay) realtime.ackMessages([id]);
-        return;
-      }
-      // Out-of-order: a regular message can land before the pre-key message that
-      // opens the session. Keep the ciphertext and retry once it advances.
-      final retryable = decryptError == 'no_session' ||
-          decryptError == 'missing_prekey' ||
-          decryptError == 'decrypt_failed';
-      final isActive = activeChatId == senderId;
-      final broken = Message(
-        id: id,
-        chatId: senderId,
-        senderId: senderId,
-        text: decryptError == 'identity_changed'
-            ? 'Ключи собеседника изменились'
-            : 'Не удалось расшифровать сообщение',
-        status: MessageStatus.delivered,
-        createdAt: createdAt,
-        meta: {
-          'undecryptable': true,
-          'code': decryptError,
-          if (retryable) 'enc': payload,
-        },
-      );
-      await store.upsertMessage(broken);
-      await store.touchChat(senderId,
-          preview: broken.text, at: createdAt, incrementUnread: !isActive);
-      if (viaRelay) realtime.ackMessages([id]);
-      _messageUpdates.add(broken);
-      _incoming.add(IncomingEvent(broken, isActiveChat: isActive));
-    } finally {
-      _inFlight.remove(id);
+      envelope = await signal.decrypt(senderId, payload, messageId: id);
+    } on EncryptionException catch (error) {
+      decryptError = error.code;
+      Log.d('message.decrypt', error.code);
     }
+    if (envelope != null) {
+      await _applyDecrypted(
+        envelope: envelope,
+        id: id,
+        senderId: senderId,
+        createdAt: createdAt,
+        viaRelay: viaRelay,
+      );
+      await signal.discardDecrypted(id);
+      await _retryPending(senderId);
+      return;
+    }
+    final retryable =
+        decryptError == 'no_session' ||
+        decryptError == 'missing_prekey' ||
+        decryptError == 'decrypt_failed' ||
+        decryptError == 'identity_changed';
+    final isActive = appResumed && activeChatId == senderId;
+    final broken = Message(
+      id: id,
+      chatId: senderId,
+      senderId: senderId,
+      text: decryptError == 'identity_changed'
+          ? 'Ключи собеседника изменились'
+          : 'Не удалось расшифровать сообщение',
+      status: MessageStatus.delivered,
+      createdAt: createdAt,
+      meta: {
+        'undecryptable': true,
+        'code': decryptError,
+        if (decryptError != 'duplicate' && decryptError != 'bad_payload')
+          'enc': payload,
+        if (retryable) 'retryable': true,
+      },
+    );
+    await store.upsertMessage(broken);
+    await store.touchChat(
+      senderId,
+      preview: broken.text,
+      at: createdAt,
+      incrementUnread: !isActive,
+    );
+    _messageUpdates.add(broken);
+    _emitIncoming(IncomingEvent(broken, isActiveChat: isActive));
   }
 
   /// Turns a successfully decrypted envelope into a stored message (or applies a
@@ -1154,7 +1498,7 @@ class MessageService {
           _messageUpdates.add(target.copyWith(reactions: reactions));
         }
       }
-      if (ack && viaRelay) realtime.ackMessages([id]);
+      if (ack && viaRelay) await _ackRelay(id);
       return;
     }
     if (type == 'delete') {
@@ -1162,9 +1506,10 @@ class MessageService {
       if (targetId != null) {
         final target = await store.getMessage(targetId);
         await store.softDeleteMessage(targetId);
-        if (target != null) _messageUpdates.add(target.copyWith(deleted: true, text: ''));
+        if (target != null)
+          _messageUpdates.add(target.copyWith(deleted: true, text: ''));
       }
-      if (ack && viaRelay) realtime.ackMessages([id]);
+      if (ack && viaRelay) await _ackRelay(id);
       return;
     }
     if (type == 'pet') {
@@ -1174,45 +1519,67 @@ class MessageService {
           ? PetState.fromJson(rawState.cast<String, dynamic>())
           : null;
       if (petState != null) {
-        _pets.add(PetEvent(
-          chatId: senderId,
-          senderId: senderId,
-          action: action,
-          state: petState,
-        ));
+        _pets.add(
+          PetEvent(
+            chatId: senderId,
+            senderId: senderId,
+            action: action,
+            state: petState,
+          ),
+        );
       }
       if (action == 'ping' || action == 'snapshot') {
-        if (ack && viaRelay) realtime.ackMessages([id]);
+        if (ack && viaRelay) await _ackRelay(id);
         return;
       }
+    }
+    if (type == 'petKey') {
+      final petId = envelope['petId'] as String?;
+      final key = envelope['key'] as String?;
+      if (petId != null && key != null) {
+        _petKeys.add(PetKeyEvent(peerId: senderId, petId: petId, key: key));
+      }
+      if (ack && viaRelay) await _ackRelay(id);
+      return;
     }
     if (type == 'groupKey') {
       final groupId = envelope['groupId'] as String?;
       final key = envelope['key'] as String?;
       if (groupId != null && key != null) {
-        await groupCrypto.importKey(groupId, key);
-        final knownBefore = await store.getChat(groupId) != null;
-        var title = '';
-        var avatar = '';
+        Group? group;
         try {
-          final group = await api.groupDetail(groupId);
-          title = group.title;
-          avatar = group.avatar;
+          group = await api.groupDetail(groupId);
+        } catch (error) {
+          Log.e('group.key', error);
+        }
+        final senderIsMember =
+            group?.members.any((m) => m.id == senderId) ?? false;
+        if (!senderIsMember) {
+          if (ack && viaRelay) await _ackRelay(id);
+          return;
+        }
+        await groupCrypto.importKey(groupId, key);
+        await _retryPendingGroups(groupId);
+        final knownBefore = await store.getChat(groupId) != null;
+        var title = group?.title ?? '';
+        var avatar = group?.avatar ?? '';
+        if (group != null) {
           final existing = await store.getChat(groupId);
-          final base = existing ??
+          final base =
+              existing ??
               Chat.group(
                 id: group.id,
                 title: group.title,
                 avatar: group.avatar,
                 memberCount: group.members.length,
               );
-          await store.upsertChat(base.copyWith(
-            peerName: group.title,
-            peerAvatar: group.avatar,
-            memberCount: group.members.length,
-          ));
-        } catch (error) {
-          Log.e('group.key', error);
+          await store.upsertChat(
+            base.copyWith(
+              peerName: group.title,
+              peerAvatar: group.avatar,
+              memberCount: group.members.length,
+            ),
+          );
         }
         if (title.isEmpty) {
           title = envelope['title'] as String? ?? '';
@@ -1227,22 +1594,22 @@ class MessageService {
             at: now,
             incrementUnread: activeChatId != groupId,
           );
-          _groups.add(GroupAddedEvent(
-            groupId: groupId,
-            title: title,
-            avatar: avatar,
-          ));
+          _emitGroup(
+            GroupAddedEvent(groupId: groupId, title: title, avatar: avatar),
+          );
         }
       }
-      if (ack && viaRelay) realtime.ackMessages([id]);
+      if (ack && viaRelay) await _ackRelay(id);
       return;
     }
 
     await ensureChat(senderId);
-    final isActive = activeChatId == senderId;
+    final isActive = appResumed && activeChatId == senderId;
     final image = envelope['image'] as String?;
     final fileData = envelope['data'] as String?;
-    var meta = (envelope['meta'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    var meta =
+        (envelope['meta'] as Map?)?.cast<String, dynamic>() ??
+        <String, dynamic>{};
     if (type == 'pet' && envelope['state'] is Map) {
       meta = {...meta, 'petState': envelope['state']};
     }
@@ -1250,19 +1617,20 @@ class MessageService {
     final MessageKind kind = type == 'image'
         ? MessageKind.image
         : type == 'file'
-            ? MessageKind.file
-            : type == 'audio'
-                ? MessageKind.audio
-                : type == 'video'
-                    ? MessageKind.video
-                    : type == 'video_note'
-                        ? MessageKind.videoNote
-                        : type == 'sticker'
-                            ? MessageKind.sticker
-                            : type == 'pet'
-                                ? MessageKind.pet
-                                : MessageKind.text;
-    final hasData = type == 'file' ||
+        ? MessageKind.file
+        : type == 'audio'
+        ? MessageKind.audio
+        : type == 'video'
+        ? MessageKind.video
+        : type == 'video_note'
+        ? MessageKind.videoNote
+        : type == 'sticker'
+        ? MessageKind.sticker
+        : type == 'pet'
+        ? MessageKind.pet
+        : MessageKind.text;
+    final hasData =
+        type == 'file' ||
         type == 'audio' ||
         type == 'video' ||
         type == 'video_note';
@@ -1281,55 +1649,138 @@ class MessageService {
     final preview = kind == MessageKind.image
         ? 'Фото'
         : kind == MessageKind.file
-            ? 'Файл'
-            : kind == MessageKind.audio
-                ? 'Голосовое'
-                : kind == MessageKind.video
-                    ? 'Видео'
-                    : kind == MessageKind.videoNote
-                        ? 'Видеокружок'
-                : kind == MessageKind.sticker
-                    ? 'Стикер'
-                    : kind == MessageKind.pet
-                        ? 'Тамагочи'
-                        : text;
-    await store.touchChat(senderId, preview: preview, at: createdAt, incrementUnread: !isActive);
+        ? 'Файл'
+        : kind == MessageKind.audio
+        ? 'Голосовое'
+        : kind == MessageKind.video
+        ? 'Видео'
+        : kind == MessageKind.videoNote
+        ? 'Видеокружок'
+        : kind == MessageKind.sticker
+        ? 'Стикер'
+        : kind == MessageKind.pet
+        ? 'Тамагочи'
+        : text;
+    await store.touchChat(
+      senderId,
+      preview: preview,
+      at: createdAt,
+      incrementUnread: !isActive,
+    );
     if (isActive) await store.markChatRead(senderId);
-    if (ack && viaRelay) {
-      realtime.ackMessages([id]);
-      if (isActive) realtime.markRead(senderId, [id]);
-    }
+    if (isActive) await _recordRead(senderId, id);
+    if (ack && viaRelay) await _ackRelay(id);
     _messageUpdates.add(message);
-    _incoming.add(IncomingEvent(message, isActiveChat: isActive));
+    _emitIncoming(IncomingEvent(message, isActiveChat: isActive));
   }
 
-  /// Re-decrypts messages that arrived before their session existed, in
-  /// chronological order, stopping at the first one still undecryptable so the
-  /// ratchet is advanced strictly in sequence.
+  /// Retries pending ciphertext in order, but skips messages that need a prekey
+  /// so a later prekey message can establish the session and unblock the rest.
   Future<void> _retryPending(String senderId) async {
-    final all = await store.getMessages(senderId, includeArchived: true, limit: 500);
-    final pending = all
-        .where((m) =>
-            m.meta['undecryptable'] == true &&
-            m.meta['enc'] is String &&
-            (m.meta['code'] == 'no_session' ||
-                m.meta['code'] == 'missing_prekey' ||
-                m.meta['code'] == 'decrypt_failed'))
-        .toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    for (final m in pending) {
+    final all = await store.getMessages(
+      senderId,
+      includeArchived: true,
+      limit: 500,
+    );
+    final pending =
+        all
+            .where(
+              (m) =>
+                  m.meta['undecryptable'] == true &&
+                  m.meta['enc'] is String &&
+                  (m.meta['retryable'] == true ||
+                      m.meta['code'] == 'no_session' ||
+                      m.meta['code'] == 'missing_prekey' ||
+                      m.meta['code'] == 'decrypt_failed' ||
+                      m.meta['code'] == 'identity_changed'),
+            )
+            .toList()
+          ..sort((a, b) {
+            final byTime = a.createdAt.compareTo(b.createdAt);
+            return byTime != 0 ? byTime : a.id.compareTo(b.id);
+          });
+    var madeProgress = true;
+    var passes = 0;
+    while (madeProgress && passes < 3) {
+      madeProgress = false;
+      passes += 1;
+      for (final message in pending) {
+        final current = await store.getMessage(message.id);
+        if (current?.meta['undecryptable'] != true) continue;
+        try {
+          final envelope = await signal.decrypt(
+            senderId,
+            current!.meta['enc'] as String,
+            messageId: current.id,
+          );
+          await _applyDecrypted(
+            envelope: envelope,
+            id: current.id,
+            senderId: senderId,
+            createdAt: current.createdAt,
+            viaRelay: false,
+            ack: false,
+          );
+          await signal.discardDecrypted(current.id);
+          final updated = await store.getMessage(current.id);
+          if (updated?.meta['undecryptable'] == true) {
+            await store.deleteMessage(current.id);
+          }
+          await _ackRelay(current.id);
+          madeProgress = true;
+        } on EncryptionException catch (error) {
+          if (error.code == 'identity_changed') return;
+          continue;
+        }
+      }
+    }
+  }
+
+  Future<void> _retryPendingGroups(String groupId) async {
+    final all = await store.getMessages(
+      groupId,
+      includeArchived: true,
+      limit: 500,
+    );
+    final pending =
+        all
+            .where(
+              (m) =>
+                  m.meta['undecryptable'] == true &&
+                  m.meta['enc'] is String &&
+                  (m.meta['retryable'] == true ||
+                      m.meta['code'] == 'no_session' ||
+                      m.meta['code'] == 'missing_prekey' ||
+                      m.meta['code'] == 'decrypt_failed' ||
+                      m.meta['code'] == 'identity_changed'),
+            )
+            .toList()
+          ..sort((a, b) {
+            final byTime = a.createdAt.compareTo(b.createdAt);
+            return byTime != 0 ? byTime : a.id.compareTo(b.id);
+          });
+    for (final message in pending) {
       try {
-        final envelope = await signal.decrypt(senderId, m.meta['enc'] as String);
-        await _applyDecrypted(
-          envelope: envelope,
-          id: m.id,
-          senderId: senderId,
-          createdAt: m.createdAt,
-          viaRelay: false,
-          ack: false,
+        final envelope = await groupCrypto.decrypt(
+          groupId,
+          message.meta['enc'] as String,
         );
-      } on EncryptionException {
-        break;
+        await _applyGroupEnvelope(
+          envelope: envelope,
+          id: message.id,
+          groupId: groupId,
+          senderId: message.senderId,
+          createdAt: message.createdAt,
+        );
+        final updated = await store.getMessage(message.id);
+        if (updated?.meta['undecryptable'] == true) {
+          await store.deleteMessage(message.id);
+        }
+        await _ackGroupRelay(message.id);
+      } on GroupCryptoException {
+        continue;
+      } catch (error) {
+        Log.e('message.group.retry', error);
       }
     }
   }
@@ -1337,27 +1788,43 @@ class MessageService {
   Future<void> openChat(String chatId) async {
     activeChatId = chatId;
     final messages = await store.getMessages(chatId, limit: 200);
-    final unreadFromPeer = messages
-        .where((m) => m.senderId != myId && m.status != MessageStatus.read)
-        .map((m) => m.id)
-        .toList();
-    if (unreadFromPeer.isNotEmpty) {
-      await store.markMessagesRead(unreadFromPeer);
-      realtime.markRead(chatId, unreadFromPeer);
-      for (final id in unreadFromPeer) {
-        final message = await store.getMessage(id);
-        if (message != null) _messageUpdates.add(message);
+    if (appResumed) {
+      final unreadFromPeer = messages
+          .where((m) => m.senderId != myId && m.status != MessageStatus.read)
+          .map((m) => m.id)
+          .toList();
+      if (unreadFromPeer.isNotEmpty) {
+        for (final id in unreadFromPeer) {
+          await store.enqueueReadReceipt(id, chatId);
+        }
+        await store.markMessagesRead(unreadFromPeer);
+        await flushReadReceipts();
+        for (final id in unreadFromPeer) {
+          final message = await store.getMessage(id);
+          if (message != null) _messageUpdates.add(message);
+        }
       }
+      await store.markChatRead(chatId);
     }
-    await store.markChatRead(chatId);
-    // A message that arrived before this device had a Signal session can be
-    // recovered once the session exists (for example after a reconnect or a
-    // key exchange). Retry those placeholders whenever the chat is opened.
-    if (messages.any((m) =>
-        m.meta['undecryptable'] == true && m.meta['enc'] is String)) {
-      unawaited(_retryPending(chatId));
+    if (messages.any(
+      (m) => m.meta['undecryptable'] == true && m.meta['enc'] is String,
+    )) {
+      final chat = await store.getChat(chatId);
+      unawaited(
+        chat?.isGroup == true
+            ? _retryPendingGroups(chatId)
+            : _retryPending(chatId),
+      );
     }
     await p2p.ensureLink(chatId);
+  }
+
+  void setAppResumed(bool value) {
+    if (appResumed == value) return;
+    appResumed = value;
+    if (value && activeChatId != null) {
+      unawaited(openChat(activeChatId!));
+    }
   }
 
   void closeChat(String chatId) {
@@ -1366,97 +1833,66 @@ class MessageService {
 
   Future<void> retry(Message message) async {
     if (message.status != MessageStatus.failed) return;
-    final Map<String, dynamic> envelope;
-    final String wireKind;
-    if (message.kind == MessageKind.sticker) {
-      envelope = {
-        'v': 1,
-        'type': 'sticker',
-        'meta': message.meta,
-        'text': '',
-        'sentAt': DateTime.now().millisecondsSinceEpoch,
-      };
-      wireKind = 'sticker';
-    } else if (message.kind == MessageKind.pet) {
-      final rawState = message.meta['petState'];
-      final state = rawState is Map
-          ? PetState.fromJson(rawState.cast<String, dynamic>())
-          : null;
-      envelope = {
-        'v': 1,
-        'type': 'pet',
+    final type = messageKindToWire(message.kind);
+    final envelope = <String, dynamic>{
+      'v': 1,
+      'type': type,
+      'text': message.text,
+      'sentAt': message.createdAt.millisecondsSinceEpoch,
+      if (message.kind == MessageKind.sticker)
+        'meta': {'sticker': message.meta['sticker']}
+      else if (message.kind == MessageKind.pet) ...{
         'action': message.meta['pet'],
-        if (state != null) 'state': state.toJson(),
-        'meta': {'pet': message.meta['pet']},
-        'text': '',
-        'sentAt': DateTime.now().millisecondsSinceEpoch,
-      };
-      wireKind = 'pet';
-    } else if (message.kind == MessageKind.image) {
-      envelope = {
-        'v': 1,
-        'type': 'image',
+        if (message.meta['petState'] is Map) 'state': message.meta['petState'],
+      } else if (message.kind == MessageKind.image) ...{
         'image': message.imageBase64,
-        'meta': message.meta,
-        'text': '',
-        'sentAt': DateTime.now().millisecondsSinceEpoch,
-      };
-      wireKind = 'image';
-    } else if (message.isFile ||
-        message.isAudio ||
-        message.isVideo ||
-        message.isVideoNote) {
-      final type = messageKindToWire(message.kind);
-      final data = message.meta['data'];
-      final meta = <String, dynamic>{
-        'mime': message.meta['mime'],
-        'size': message.meta['size'],
-        if (type == 'file' || type == 'video') 'name': message.meta['name'],
-        if (type == 'audio' ||
-            type == 'video' ||
-            type == 'video_note') 'durationMs': message.meta['durationMs'],
-      };
-      envelope = {
-        'v': 1,
-        'type': type,
-        'data': data,
-        'meta': meta,
-        'text': '',
-        'sentAt': DateTime.now().millisecondsSinceEpoch,
-      };
-      wireKind = type;
-    } else {
-      envelope = {
-        'v': 1,
-        'type': 'text',
-        'text': message.text,
-        'sentAt': DateTime.now().millisecondsSinceEpoch,
-      };
-      wireKind = 'text';
-    }
-    final ciphertext = await signal.encrypt(message.chatId, envelope);
+        'meta': {'mime': message.meta['mime'], 'name': message.meta['name']},
+      } else if (message.isFile ||
+          message.isAudio ||
+          message.isVideo ||
+          message.isVideoNote) ...{
+        'data': message.meta['data'],
+        'meta': {
+          'mime': message.meta['mime'],
+          'size': message.meta['size'],
+          if (type == 'file' || type == 'video') 'name': message.meta['name'],
+          if (type == 'audio' || type == 'video' || type == 'video_note')
+            'durationMs': message.meta['durationMs'],
+        },
+      },
+    };
+    final isGroup = (await store.getChat(message.chatId))?.isGroup ?? false;
+    final ciphertext = isGroup
+        ? await groupCrypto.encrypt(message.chatId, envelope)
+        : await signal.encrypt(message.chatId, envelope);
+    final wireMeta = <String, dynamic>{...message.meta}
+      ..remove('data')
+      ..remove('petState');
     await store.upsertMessage(message.copyWith(status: MessageStatus.sending));
-    final retryMeta = (message.meta.containsKey('data') ||
-            message.meta.containsKey('petState'))
-        ? (<String, dynamic>{...message.meta}
-          ..remove('data')
-          ..remove('petState'))
-        : message.meta;
-    realtime.sendMessage(
-      id: message.id,
-      to: message.chatId,
-      ciphertext: ciphertext,
-      kind: wireKind,
-      meta: retryMeta,
-      createdAt: message.createdAt,
+    await store.enqueueOutbox(
+      OutboxItem(
+        id: message.id,
+        chatId: message.chatId,
+        payload: {
+          'id': message.id,
+          'to': message.chatId,
+          'group': isGroup,
+          'ciphertext': ciphertext,
+          'kind': type,
+          'meta': wireMeta,
+          'createdAt': message.createdAt.millisecondsSinceEpoch,
+        },
+        createdAt: message.createdAt,
+      ),
     );
-    await store.updateMessageStatus(message.id, MessageStatus.sent);
     final updated = await store.getMessage(message.id);
     if (updated != null) _messageUpdates.add(updated);
+    await flushOutbox();
   }
 
   Future<void> dispose() async {
     _outboxTimer?.cancel();
+    await Future.wait(List.of(_pendingAcks));
     await _eventSubscription.cancel();
     await _statusSubscription.cancel();
     await _messageUpdates.close();
@@ -1467,5 +1903,6 @@ class MessageService {
     await _removed.close();
     await _groups.close();
     await _pets.close();
+    await _petKeys.close();
   }
 }
